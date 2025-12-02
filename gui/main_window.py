@@ -11,11 +11,11 @@ from PySide6.QtWidgets import (
 from pathlib import Path
 
 from core.step_ffmpeg import extract_frames
+from core.step_bitmap import convert_project_frames_to_bmp
+from core.step_potrace import bitmap_to_svg_folder
 from core.config import PROJECTS_ROOT
 from .preview_widgets import RasterPreview
 
-
-from core.step_ffmpeg import extract_frames
 
 class MainWindow(QMainWindow):
     def __init__(self):
@@ -60,6 +60,17 @@ class MainWindow(QMainWindow):
         self.btn_ffmpeg = QPushButton("1. Extraire frames (FFmpeg)")
         self.btn_ffmpeg.clicked.connect(self.on_ffmpeg_click)
         layout.addWidget(self.btn_ffmpeg)
+
+        # --- Bouton BMP ---
+        self.btn_bmp = QPushButton("2. Préparer BMP (ImageMagick)")
+        self.btn_bmp.clicked.connect(self.on_bmp_click)
+        layout.addWidget(self.btn_bmp)
+
+        # --- Bouton Potrace ---
+        self.btn_potrace = QPushButton("3. Vectoriser (Potrace)")
+        self.btn_potrace.clicked.connect(self.on_potrace_click)
+        layout.addWidget(self.btn_potrace)
+
 
         # --- Contrôles de prévisualisation ---
         row_preview = QHBoxLayout()
@@ -164,7 +175,46 @@ class MainWindow(QMainWindow):
             return
 
         self.log(f"[FFmpeg] Terminé. Frames dans : {frames_dir}")
-        
+    def on_bmp_click(self):
+        """Convertit les frames PNG du projet en BMP via ImageMagick."""
+        project = (self.edit_project.text() or "").strip()
+        if not project:
+            self.log("Erreur BMP : nom de projet vide.")
+            return
+
+        self.log(f"[BMP] Conversion PNG -> BMP pour le projet '{project}'...")
+
+        try:
+            bmp_dir = convert_project_frames_to_bmp(project)
+        except Exception as e:
+            self.log(f"[BMP] ERREUR : {e}")
+            return
+
+        self.log(f"[BMP] Terminé. BMP dans : {bmp_dir}")
+
+    def on_potrace_click(self):
+        """Vectorise les BMP du projet en SVG via Potrace."""
+        project = (self.edit_project.text() or "").strip()
+        if not project:
+            self.log("Erreur Potrace : nom de projet vide.")
+            return
+
+        project_root = PROJECTS_ROOT / project
+        bmp_dir = project_root / "bmp"
+        svg_dir = project_root / "svg"
+
+        self.log(f"[Potrace] Vectorisation BMP -> SVG pour le projet '{project}'...")
+        self.log(f"  Entrée : {bmp_dir}")
+        self.log(f"  Sortie : {svg_dir}")
+
+        try:
+            svg_out = bitmap_to_svg_folder(str(bmp_dir), str(svg_dir))
+        except Exception as e:
+            self.log(f"[Potrace] ERREUR : {e}")
+            return
+
+        self.log(f"[Potrace] Terminé. SVG dans : {svg_out}")
+
     def on_preview_frame(self):
         """Affiche une frame PNG du projet dans le widget de prévisualisation."""
         project = (self.edit_project.text() or "").strip()
