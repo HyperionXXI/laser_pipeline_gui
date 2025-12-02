@@ -1,6 +1,9 @@
 # Environnement virtuel
 .venv/
 
+# Fichiers générés par le pipeline
+projects/
+
 # Python
 __pycache__/
 *.pyc
