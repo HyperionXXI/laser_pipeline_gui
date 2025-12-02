@@ -16,28 +16,86 @@ class MainWindow(QMainWindow):
         central = QWidget()
         layout = QVBoxLayout(central)
 
-        # Ligne simple : un champ texte + bouton
-        row = QHBoxLayout()
-        self.input_edit = QLineEdit()
-        btn = QPushButton("Dire bonjour")
-        btn.clicked.connect(self.on_click)
+        # --- Ligne 1 : vidéo source + bouton Parcourir ---
+        row_video = QHBoxLayout()
+        self.edit_video = QLineEdit()
+        btn_browse = QPushButton("Parcourir…")
+        btn_browse.clicked.connect(self.choose_video)
 
-        row.addWidget(QLabel("Nom :"))
-        row.addWidget(self.input_edit)
-        row.addWidget(btn)
-        layout.addLayout(row)
+        row_video.addWidget(QLabel("Vidéo source :"))
+        row_video.addWidget(self.edit_video)
+        row_video.addWidget(btn_browse)
+        layout.addLayout(row_video)
 
-        # Zone de log / sortie
+        # --- Ligne 2 : nom de projet ---
+        row_project = QHBoxLayout()
+        self.edit_project = QLineEdit("projet_demo")
+        row_project.addWidget(QLabel("Nom du projet :"))
+        row_project.addWidget(self.edit_project)
+        layout.addLayout(row_project)
+
+        # --- Ligne 3 : FPS ---
+        row_fps = QHBoxLayout()
+        self.edit_fps = QLineEdit("25")
+        row_fps.addWidget(QLabel("FPS :"))
+        row_fps.addWidget(self.edit_fps)
+        layout.addLayout(row_fps)
+
+        # --- Bouton principal : test des paramètres ---
+        self.btn_test = QPushButton("Tester les paramètres")
+        self.btn_test.clicked.connect(self.on_test_click)
+        layout.addWidget(self.btn_test)
+
+        # --- Zone de log ---
         self.log_view = QTextEdit()
         self.log_view.setReadOnly(True)
         layout.addWidget(self.log_view)
 
         self.setCentralWidget(central)
 
-    def on_click(self):
-        name = self.input_edit.text().strip() or "inconnu"
-        self.log_view.append(f"Bonjour, {name} !")
+    def log(self, text: str):
+        """Ajoute une ligne dans la zone de log."""
+        self.log_view.append(text)
 
+    def choose_video(self):
+        """Ouvre une boîte de dialogue pour choisir un fichier vidéo."""
+        from PySide6.QtWidgets import QFileDialog
+
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Choisir une vidéo",
+            "",
+            "Vidéos (*.mp4 *.mov *.avi);;Tous les fichiers (*)"
+        )
+        if path:
+            self.edit_video.setText(path)
+            self.log(f"Vidéo sélectionnée : {path}")
+            
+    def on_test_click(self):
+        """Vérifie les paramètres entrés et les affiche dans le log."""
+        video = (self.edit_video.text() or "").strip()
+        project = (self.edit_project.text() or "").strip()
+        fps_text = (self.edit_fps.text() or "").strip()
+
+        # Validation simple
+        if not video:
+            self.log("Erreur : aucune vidéo sélectionnée.")
+            return
+        if not project:
+            self.log("Erreur : nom de projet vide.")
+            return
+
+        try:
+            fps = int(fps_text)
+        except ValueError:
+            self.log(f"Erreur : FPS invalide ({fps_text}), utiliser un entier.")
+            return
+
+        self.log("=== Paramètres actuels ===")
+        self.log(f"Vidéo : {video}")
+        self.log(f"Projet : {project}")
+        self.log(f"FPS : {fps}")
+        self.log("==========================")
 
 def run():
     app = QApplication(sys.argv)
