@@ -2,9 +2,13 @@
 
 from pathlib import Path
 
-# ⚠️ À adapter si besoin selon l'endroit où est installé ffmpeg
+# Chemin vers ffmpeg
 FFMPEG_PATH = Path(r"C:\ffmpeg-7.1-essentials_build\bin\ffmpeg.exe")
 
-# Dossier racine où seront créés les projets d'export
+# Chemin vers Potrace
+POTRACE_PATH = Path(r"C:\potrace-1.16.win64\potrace.exe")
+
+# Dossier racine pour les projets
 PROJECTS_ROOT = Path("projects")
 PROJECTS_ROOT.mkdir(exist_ok=True)
+
