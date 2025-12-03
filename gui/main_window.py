@@ -2,11 +2,13 @@
 
 import sys
 
+
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout,
     QHBoxLayout, QLabel, QLineEdit, QPushButton, QTextEdit,
-    QSpinBox,
+    QSpinBox, QCheckBox,
 )
+
 
 from pathlib import Path
 
@@ -66,10 +68,32 @@ class MainWindow(QMainWindow):
         self.btn_bmp.clicked.connect(self.on_bmp_click)
         layout.addWidget(self.btn_bmp)
 
+        # --- Paramètres BMP ---
+        row_bmp_params = QHBoxLayout()
+
+        row_bmp_params.addWidget(QLabel("Seuil (%) :"))
+        self.spin_bmp_threshold = QSpinBox()
+        self.spin_bmp_threshold.setRange(0, 100)
+        self.spin_bmp_threshold.setValue(60)  # valeur par défaut
+        row_bmp_params.addWidget(self.spin_bmp_threshold)
+
+        self.check_bmp_thinning = QCheckBox("Thinning")
+        self.check_bmp_thinning.setChecked(False)
+        row_bmp_params.addWidget(self.check_bmp_thinning)
+
+        row_bmp_params.addWidget(QLabel("Max frames (0 = toutes) :"))
+        self.spin_bmp_max_frames = QSpinBox()
+        self.spin_bmp_max_frames.setRange(0, 100000)
+        self.spin_bmp_max_frames.setValue(0)  # 0 => pas de limite
+        row_bmp_params.addWidget(self.spin_bmp_max_frames)
+
+        layout.addLayout(row_bmp_params)
+
         # --- Bouton Potrace ---
         self.btn_potrace = QPushButton("3. Vectoriser (Potrace)")
         self.btn_potrace.clicked.connect(self.on_potrace_click)
         layout.addWidget(self.btn_potrace)
+
 
 
         # --- Contrôles de prévisualisation ---
@@ -200,21 +224,35 @@ class MainWindow(QMainWindow):
 
         self.log(f"[FFmpeg] Terminé. Frames dans : {frames_dir}")
     def on_bmp_click(self):
-        """Convertit les frames PNG du projet en BMP via ImageMagick."""
+        """Convertit les frames PNG du projet en BMP via ImageMagick (avec paramètres GUI)."""
         project = (self.edit_project.text() or "").strip()
         if not project:
             self.log("Erreur BMP : nom de projet vide.")
             return
 
-        self.log(f"[BMP] Conversion PNG -> BMP pour le projet '{project}'...")
+        threshold = self.spin_bmp_threshold.value()
+        use_thinning = self.check_bmp_thinning.isChecked()
+        max_frames_value = self.spin_bmp_max_frames.value()
+        max_frames = max_frames_value if max_frames_value > 0 else None
+
+        self.log(
+            f"[BMP] Conversion PNG -> BMP pour le projet '{project}' "
+            f"(threshold={threshold}%, thinning={use_thinning}, max_frames={max_frames or 'toutes'})..."
+        )
 
         try:
-            bmp_dir = convert_project_frames_to_bmp(project)
+            bmp_dir = convert_project_frames_to_bmp(
+                project,
+                threshold=threshold,
+                use_thinning=use_thinning,
+                max_frames=max_frames,
+            )
         except Exception as e:
             self.log(f"[BMP] ERREUR : {e}")
             return
 
         self.log(f"[BMP] Terminé. BMP dans : {bmp_dir}")
+
 
     def on_potrace_click(self):
         """Vectorise les BMP du projet en SVG via Potrace."""
