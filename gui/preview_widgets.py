@@ -2,132 +2,115 @@
 
 from pathlib import Path
 
-from PySide6.QtWidgets import (
-    QWidget,
-    QLabel,
-    QStackedLayout,
-    QSizePolicy,
-)
-from PySide6.QtGui import QPixmap
-from PySide6.QtCore import Qt, QSize
-from PySide6.QtSvgWidgets import QSvgWidget
+from PySide6.QtCore import Qt, QSize, QRectF
+from PySide6.QtGui import QPixmap, QImage, QPainter
+from PySide6.QtWidgets import QWidget, QLabel, QVBoxLayout
+from PySide6.QtSvg import QSvgRenderer
 
 
-PREVIEW_MIN_SIZE = QSize(320, 240)
-
-
-class RasterPreview(QWidget):
+class BasePreview(QWidget):
     """
-    Prévisualisation raster (PNG / BMP).
-
-    - Même taille mini pour tous les previews.
-    - Texte "Aucune image" tant qu'aucune image n'est chargée.
-    - Image redimensionnée en conservant le ratio.
+    Widget de base : un QLabel centré qui affiche soit un texte,
+    soit un QPixmap mis à l'échelle.
     """
 
-    def __init__(self, parent=None):
+    def __init__(self, placeholder: str = "Aucune image", parent=None):
         super().__init__(parent)
+        self._placeholder = placeholder
+        self._label = QLabel(placeholder)
+        self._label.setAlignment(Qt.AlignCenter)
+        self._label.setWordWrap(True)
 
-        self._stack = QStackedLayout(self)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.addWidget(self._label)
 
-        self._placeholder = QLabel("Aucune image")
-        self._placeholder.setAlignment(Qt.AlignCenter)
-
-        self._image_label = QLabel()
-        self._image_label.setAlignment(Qt.AlignCenter)
-        self._image_label.setScaledContents(False)
-
-        self._stack.addWidget(self._placeholder)
-        self._stack.addWidget(self._image_label)
-
-        self.setMinimumSize(PREVIEW_MIN_SIZE)
-        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+    def _target_size(self) -> QSize:
+        s = self.size()
+        if not s.isValid() or s.width() <= 0 or s.height() <= 0:
+            return QSize(320, 240)
+        return s
 
     def clear(self):
-        self._image_label.clear()
-        self._stack.setCurrentWidget(self._placeholder)
+        """Réinitialise la preview avec le texte de placeholder."""
+        self._label.setPixmap(QPixmap())
+        self._label.setText(self._placeholder)
+
+    def _set_pixmap_scaled(self, pixmap: QPixmap):
+        if pixmap.isNull():
+            self.clear()
+            return
+        target = self._target_size()
+        scaled = pixmap.scaled(target, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+        self._label.setPixmap(scaled)
+        self._label.setText("")
+
+
+class RasterPreview(BasePreview):
+    """
+    Preview pour images raster (PNG, BMP, …).
+    """
 
     def show_image(self, path: str):
-        if not path or not Path(path).is_file():
+        p = Path(path)
+        if not p.is_file():
             self.clear()
             return
 
-        pix = QPixmap(path)
-        if pix.isNull():
-            self.clear()
-            return
-
-        target_size = self.size()
-        if target_size.width() <= 0 or target_size.height() <= 0:
-            target_size = PREVIEW_MIN_SIZE
-
-        scaled = pix.scaled(
-            target_size,
-            Qt.KeepAspectRatio,
-            Qt.SmoothTransformation,
-        )
-        self._image_label.setPixmap(scaled)
-        self._stack.setCurrentWidget(self._image_label)
-
-    def resizeEvent(self, event):
-        super().resizeEvent(event)
-        # Si une image est affichée, on la rescale pour garder le ratio
-        if self._stack.currentWidget() is self._image_label:
-            pix = self._image_label.pixmap()
-            if pix is not None:
-                target_size = self.size()
-                scaled = pix.scaled(
-                    target_size,
-                    Qt.KeepAspectRatio,
-                    Qt.SmoothTransformation,
-                )
-                self._image_label.setPixmap(scaled)
+        pix = QPixmap(str(p))
+        self._set_pixmap_scaled(pix)
 
 
-class SvgPreview(QWidget):
+class SvgPreview(BasePreview):
     """
-    Prévisualisation SVG.
-
-    Même logique que RasterPreview : placeholder "Aucune image",
-    même taille mini, et widget SVG qui remplit la zone.
+    Preview pour SVG, en rasterisant le vecteur dans un QImage/QPixmap.
+    Cela permet d'avoir le même comportement que RasterPreview
+    (même taille de widget, scaling, etc.).
     """
-
-    def __init__(self, parent=None):
-        super().__init__(parent)
-
-        self._stack = QStackedLayout(self)
-
-        self._placeholder = QLabel("Aucune image")
-        self._placeholder.setAlignment(Qt.AlignCenter)
-
-        self._svg_widget = QSvgWidget()
-        self._svg_widget.setSizePolicy(
-            QSizePolicy.Expanding,
-            QSizePolicy.Expanding,
-        )
-
-        self._stack.addWidget(self._placeholder)
-        self._stack.addWidget(self._svg_widget)
-
-        self.setMinimumSize(PREVIEW_MIN_SIZE)
-        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-
-    def clear(self):
-        self._svg_widget.load(b"")
-        self._stack.setCurrentWidget(self._placeholder)
 
     def show_svg(self, path: str):
-        if not path or not Path(path).is_file():
+        p = Path(path)
+        if not p.is_file():
             self.clear()
             return
 
-        # QSvgWidget sait se redessiner à la taille du widget
-        self._svg_widget.load(path)
-        self._stack.setCurrentWidget(self._svg_widget)
-        self._svg_widget.repaint()
+        renderer = QSvgRenderer(str(p))
+        if not renderer.isValid():
+            self.clear()
+            return
 
-    def resizeEvent(self, event):
-        super().resizeEvent(event)
-        # On redimensionne le widget SVG à la nouvelle taille
-        if self._stack.currentWidget() is self._svg_widget:
-            self._svg_widget.resize(self.size())
+        target = self._target_size()
+        w = max(target.width(), 1)
+        h = max(target.height(), 1)
+
+        # Fond noir pour rester cohérent avec les BMP/PNG traités
+        image = QImage(w, h, QImage.Format_ARGB32_Premultiplied)
+        image.fill(Qt.black)
+
+        painter = QPainter(image)
+
+        view_box = renderer.viewBox()
+        if not view_box.isNull():
+            # On adapte le viewBox au rectangle de rendu en conservant le ratio
+            target_rect = QRectF(0, 0, w, h)
+
+            sx = target_rect.width() / view_box.width()
+            sy = target_rect.height() / view_box.height()
+            s = min(sx, sy)
+
+            tw = view_box.width() * s
+            th = view_box.height() * s
+            tx = (target_rect.width() - tw) / 2.0
+            ty = (target_rect.height() - th) / 2.0
+
+            painter.translate(tx, ty)
+            painter.scale(s, s)
+            renderer.render(painter, view_box)
+        else:
+            # Fallback : on laisse Qt gérer le cadrage
+            renderer.render(painter, QRectF(0, 0, w, h))
+
+        painter.end()
+
+        pix = QPixmap.fromImage(image)
+        self._set_pixmap_scaled(pix)
