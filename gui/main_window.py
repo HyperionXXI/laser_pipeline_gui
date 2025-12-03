@@ -5,8 +5,9 @@ import sys
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout,
     QHBoxLayout, QLabel, QLineEdit, QPushButton, QTextEdit,
-    QSpinBox,
+    QSpinBox, QComboBox,
 )
+
 
 from pathlib import Path
 
@@ -75,16 +76,24 @@ class MainWindow(QMainWindow):
         # --- Contrôles de prévisualisation ---
         row_preview = QHBoxLayout()
         row_preview.addWidget(QLabel("Frame :"))
+
         self.spin_frame = QSpinBox()
         self.spin_frame.setMinimum(1)
-        self.spin_frame.setMaximum(99999)  # on ajustera si besoin
+        self.spin_frame.setMaximum(99999)
         row_preview.addWidget(self.spin_frame)
+
+        # Nouveau : choix de la source (PNG ou BMP)
+        row_preview.addWidget(QLabel("Source :"))
+        self.combo_source = QComboBox()
+        self.combo_source.addItems(["PNG (frames)", "BMP (bitmap)"])
+        row_preview.addWidget(self.combo_source)
 
         self.btn_preview = QPushButton("Prévisualiser frame")
         self.btn_preview.clicked.connect(self.on_preview_frame)
         row_preview.addWidget(self.btn_preview)
 
         layout.addLayout(row_preview)
+
 
         # --- Zone de prévisualisation ---
         self.preview = RasterPreview()
@@ -216,19 +225,30 @@ class MainWindow(QMainWindow):
         self.log(f"[Potrace] Terminé. SVG dans : {svg_out}")
 
     def on_preview_frame(self):
-        """Affiche une frame PNG du projet dans le widget de prévisualisation."""
+        """Affiche une frame (PNG ou BMP) du projet dans le widget de prévisualisation."""
         project = (self.edit_project.text() or "").strip()
         if not project:
             self.log("Erreur prévisualisation : nom de projet vide.")
             return
 
         frame_index = self.spin_frame.value()
-        frames_dir = PROJECTS_ROOT / project / "frames"
-        filename = f"frame_{frame_index:04d}.png"
-        path = frames_dir / filename
+        source_mode = self.combo_source.currentText()
 
-        self.log(f"[Preview] Frame {frame_index} → {path}")
+        if source_mode.startswith("PNG"):
+            base_dir = PROJECTS_ROOT / project / "frames"
+            ext = ".png"
+            src_label = "frames (PNG)"
+        else:
+            base_dir = PROJECTS_ROOT / project / "bmp"
+            ext = ".bmp"
+            src_label = "bitmap (BMP)"
+
+        filename = f"frame_{frame_index:04d}{ext}"
+        path = base_dir / filename
+
+        self.log(f"[Preview] Frame {frame_index} ({src_label}) → {path}")
         self.preview.show_image(str(path))
+
 
 
 def run():
