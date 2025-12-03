@@ -17,6 +17,7 @@ from core.step_bitmap import convert_project_frames_to_bmp
 from core.step_potrace import bitmap_to_svg_folder
 from core.config import PROJECTS_ROOT
 from .preview_widgets import RasterPreview, SvgPreview
+from PySide6.QtCore import Qt
 
 class MainWindow(QMainWindow):
     def __init__(self):
@@ -29,13 +30,14 @@ class MainWindow(QMainWindow):
 
         # --- Ligne 1 : vidéo source + bouton Parcourir ---
         row_video = QHBoxLayout()
-        self.edit_video = QLineEdit()
-        btn_browse = QPushButton("Parcourir…")
-        btn_browse.clicked.connect(self.choose_video)
+        self.edit_video_path = QLineEdit()
+
+        self.btn_browse = QPushButton("Parcourir…")
+        self.btn_browse.clicked.connect(self.choose_video)
 
         row_video.addWidget(QLabel("Vidéo source :"))
-        row_video.addWidget(self.edit_video)
-        row_video.addWidget(btn_browse)
+        row_video.addWidget(self.edit_video_path)
+        row_video.addWidget(self.btn_browse)
         layout.addLayout(row_video)
 
         # --- Ligne 2 : nom de projet ---
@@ -47,9 +49,13 @@ class MainWindow(QMainWindow):
 
         # --- Ligne 3 : FPS ---
         row_fps = QHBoxLayout()
-        self.edit_fps = QLineEdit("25")
         row_fps.addWidget(QLabel("FPS :"))
-        row_fps.addWidget(self.edit_fps)
+
+        self.spin_fps = QSpinBox()
+        self.spin_fps.setRange(1, 200)
+        self.spin_fps.setValue(25)
+        row_fps.addWidget(self.spin_fps)
+
         layout.addLayout(row_fps)
 
         # --- Bouton principal : test des paramètres ---
@@ -155,6 +161,32 @@ class MainWindow(QMainWindow):
 
         self.setCentralWidget(central)
 
+    def set_busy(self, busy: bool):
+        """
+        Active/désactive les boutons principaux et change le curseur.
+
+        busy=True  -> désactive les actions, curseur 'attente'
+        busy=False -> réactive les actions, curseur normal
+        """
+        # Liste des widgets à désactiver pendant un traitement
+        widgets = [
+            getattr(self, "btn_test", None),
+            getattr(self, "btn_ffmpeg", None),
+            getattr(self, "btn_bmp", None),
+            getattr(self, "btn_potrace", None),
+            getattr(self, "btn_preview", None),
+            getattr(self, "btn_browse", None),  # si ce bouton existe
+        ]
+
+        for w in widgets:
+            if w is not None:
+                w.setEnabled(not busy)
+
+        if busy:
+            QApplication.setOverrideCursor(Qt.WaitCursor)
+        else:
+            QApplication.restoreOverrideCursor()
+
 
     def log(self, text: str):
         """Ajoute une ligne dans la zone de log."""
@@ -171,14 +203,14 @@ class MainWindow(QMainWindow):
             "Vidéos (*.mp4 *.mov *.avi);;Tous les fichiers (*)"
         )
         if path:
-            self.edit_video.setText(path)
+            self.edit_video_path.setText(path)
             self.log(f"Vidéo sélectionnée : {path}")
 
     def on_test_click(self):
         """Vérifie les paramètres entrés et les affiche dans le log."""
-        video = (self.edit_video.text() or "").strip()
+        video = (self.edit_video_path.text() or "").strip()
         project = (self.edit_project.text() or "").strip()
-        fps_text = (self.edit_fps.text() or "").strip()
+        fps = self.spin_fps.value()
 
         # Validation simple
         if not video:
@@ -188,50 +220,42 @@ class MainWindow(QMainWindow):
             self.log("Erreur : nom de projet vide.")
             return
 
-        try:
-            fps = int(fps_text)
-        except ValueError:
-            self.log(f"Erreur : FPS invalide ({fps_text}), utiliser un entier.")
-            return
-
         self.log("=== Paramètres actuels ===")
         self.log(f"Vidéo : {video}")
         self.log(f"Projet : {project}")
         self.log(f"FPS : {fps}")
         self.log("==========================")
 
+
     def on_ffmpeg_click(self):
         """Lance l'extraction des frames via FFmpeg."""
-        video = (self.edit_video.text() or "").strip()
+        video = (self.edit_video_path.text() or "").strip()
         project = (self.edit_project.text() or "").strip()
-        fps_text = (self.edit_fps.text() or "").strip()
+        fps = self.spin_fps.value()
 
-        # Validation basique (identique à on_test_click)
         if not video:
-            self.log("Erreur FFmpeg : aucune vidéo sélectionnée.")
+            self.log("Erreur FFmpeg : aucun fichier vidéo sélectionné.")
             return
         if not project:
             self.log("Erreur FFmpeg : nom de projet vide.")
             return
 
-        try:
-            fps = int(fps_text)
-        except ValueError:
-            self.log(f"Erreur FFmpeg : FPS invalide ({fps_text}).")
-            return
+        self.log("[FFmpeg] Démarrage extraction frames...")
+        self.log(f"  Vidéo  : {video}")
+        self.log(f"  Projet : {project}")
+        self.log(f"  FPS    : {fps}")
 
-        self.log(f"[FFmpeg] Démarrage extraction frames…")
-        self.log(f"  Vidéo   : {video}")
-        self.log(f"  Projet  : {project}")
-        self.log(f"  FPS     : {fps}")
-
+        self.set_busy(True)
         try:
-            frames_dir = extract_frames(video, project, fps)
+            out_dir = extract_frames(video, project, fps=fps)
         except Exception as e:
             self.log(f"[FFmpeg] ERREUR : {e}")
-            return
+        else:
+            self.log(f"[FFmpeg] Terminé. Frames dans : {out_dir}")
+        finally:
+            self.set_busy(False)
 
-        self.log(f"[FFmpeg] Terminé. Frames dans : {frames_dir}")
+
     def on_bmp_click(self):
         """Convertit les frames PNG du projet en BMP via ImageMagick (avec paramètres GUI)."""
         project = (self.edit_project.text() or "").strip()
@@ -246,9 +270,11 @@ class MainWindow(QMainWindow):
 
         self.log(
             f"[BMP] Conversion PNG -> BMP pour le projet '{project}' "
-            f"(threshold={threshold}%, thinning={use_thinning}, max_frames={max_frames or 'toutes'})..."
+            f"(threshold={threshold}%, thinning={use_thinning}, "
+            f"max_frames={max_frames or 'toutes'})..."
         )
 
+        self.set_busy(True)
         try:
             bmp_dir = convert_project_frames_to_bmp(
                 project,
@@ -258,10 +284,10 @@ class MainWindow(QMainWindow):
             )
         except Exception as e:
             self.log(f"[BMP] ERREUR : {e}")
-            return
-
-        self.log(f"[BMP] Terminé. BMP dans : {bmp_dir}")
-
+        else:
+            self.log(f"[BMP] Terminé. BMP dans : {bmp_dir}")
+        finally:
+            self.set_busy(False)
 
     def on_potrace_click(self):
         """Vectorise les BMP du projet en SVG via Potrace."""
@@ -278,13 +304,16 @@ class MainWindow(QMainWindow):
         self.log(f"  Entrée : {bmp_dir}")
         self.log(f"  Sortie : {svg_dir}")
 
+        self.set_busy(True)
         try:
             svg_out = bitmap_to_svg_folder(str(bmp_dir), str(svg_dir))
         except Exception as e:
             self.log(f"[Potrace] ERREUR : {e}")
-            return
+        else:
+            self.log(f"[Potrace] Terminé. SVG dans : {svg_out}")
+        finally:
+            self.set_busy(False)
 
-        self.log(f"[Potrace] Terminé. SVG dans : {svg_out}")
 
     def on_preview_frame(self):
         """Affiche la frame sélectionnée en PNG, BMP et SVG, côte à côte."""
