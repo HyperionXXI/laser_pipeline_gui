@@ -1,52 +1,69 @@
-# gui/preview_widgets.py
-
 from pathlib import Path
 
-from PySide6.QtWidgets import QWidget, QVBoxLayout, QLabel, QSizePolicy
+from PySide6.QtWidgets import QLabel
 from PySide6.QtGui import QPixmap
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QByteArray
+from PySide6.QtSvgWidgets import QSvgWidget
 
 
-class RasterPreview(QWidget):
-    """Widget simple pour afficher une image raster (PNG, JPG, etc.)."""
-
+class RasterPreview(QLabel):
     def __init__(self, parent=None):
         super().__init__(parent)
-        layout = QVBoxLayout(self)
-
-        self.label = QLabel("Aucune image")
-        self.label.setAlignment(Qt.AlignCenter)
-        self.label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-
-        layout.addWidget(self.label)
+        self.setAlignment(Qt.AlignCenter)
+        self.setText("Aucune image")
+        self.setMinimumSize(200, 200)
 
     def show_image(self, path: str):
         p = Path(path)
         if not p.is_file():
-            self.label.setText(f"Introuvable :\n{p}")
+            self.setText(f"Introuvable :\n{p}")
+            self.setPixmap(QPixmap())  # efface l'ancienne image
             return
 
         pix = QPixmap(str(p))
         if pix.isNull():
-            self.label.setText(f"Impossible de charger :\n{p}")
+            self.setText(f"Erreur de chargement :\n{p}")
+            self.setPixmap(QPixmap())
             return
 
-        self._set_scaled_pixmap(pix)
-
-    def _set_scaled_pixmap(self, pix: QPixmap):
-        if pix.isNull():
-            return
-        self.label.setPixmap(
-            pix.scaled(
-                self.size(),
-                Qt.KeepAspectRatio,
-                Qt.SmoothTransformation,
-            )
-        )
+        self.setPixmap(pix.scaled(
+            self.size(),
+            Qt.KeepAspectRatio,
+            Qt.SmoothTransformation
+        ))
+        self.setText("")
 
     def resizeEvent(self, event):
-        """Quand on redimensionne la fenêtre, on rescaille l'image si nécessaire."""
-        pix = self.label.pixmap()
-        if pix:
-            self._set_scaled_pixmap(pix)
+        # Re-scale quand on redimensionne la fenêtre
+        if self.pixmap() is not None and not self.pixmap().isNull():
+            self.setPixmap(self.pixmap().scaled(
+                self.size(),
+                Qt.KeepAspectRatio,
+                Qt.SmoothTransformation
+            ))
         super().resizeEvent(event)
+
+
+class SvgPreview(QSvgWidget):
+    """
+    Widget simple pour afficher un fichier SVG.
+    """
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setMinimumSize(200, 200)
+        self._current_path = None
+
+    def show_svg(self, path: str):
+        p = Path(path)
+        self._current_path = str(p)
+
+        if not p.is_file():
+            # On "efface" en chargeant un SVG vide
+            self.renderer().load(QByteArray())
+            self.setToolTip(f"Introuvable : {p}")
+            return
+
+        data = QByteArray(p.read_bytes())
+        self.renderer().load(data)
+        self.setToolTip(str(p))
+        self.update()

@@ -16,8 +16,7 @@ from core.step_ffmpeg import extract_frames
 from core.step_bitmap import convert_project_frames_to_bmp
 from core.step_potrace import bitmap_to_svg_folder
 from core.config import PROJECTS_ROOT
-from .preview_widgets import RasterPreview
-
+from .preview_widgets import RasterPreview, SvgPreview
 
 class MainWindow(QMainWindow):
     def __init__(self):
@@ -111,7 +110,7 @@ class MainWindow(QMainWindow):
 
         layout.addLayout(row_preview)
 
-        # --- Zones de prévisualisation (PNG & BMP) ---
+        # --- Zones de prévisualisation (PNG, BMP, SVG) ---
         previews_row = QHBoxLayout()
 
         # Colonne PNG
@@ -136,8 +135,18 @@ class MainWindow(QMainWindow):
 
         previews_row.addLayout(col_bmp)
 
-        layout.addLayout(previews_row)
+        # Colonne SVG
+        col_svg = QVBoxLayout()
+        label_svg = QLabel("SVG (vectorisé)")
+        col_svg.addWidget(label_svg)
 
+        self.preview_svg = SvgPreview()
+        self.preview_svg.setMinimumSize(200, 200)
+        col_svg.addWidget(self.preview_svg)
+
+        previews_row.addLayout(col_svg)
+
+        layout.addLayout(previews_row)
 
         # --- Zone de log ---
         self.log_view = QTextEdit()
@@ -278,7 +287,7 @@ class MainWindow(QMainWindow):
         self.log(f"[Potrace] Terminé. SVG dans : {svg_out}")
 
     def on_preview_frame(self):
-        """Affiche la frame sélectionnée en PNG et BMP, côte à côte."""
+        """Affiche la frame sélectionnée en PNG, BMP et SVG, côte à côte."""
         project = (self.edit_project.text() or "").strip()
         if not project:
             self.log("Erreur prévisualisation : nom de projet vide.")
@@ -289,15 +298,20 @@ class MainWindow(QMainWindow):
         project_root = PROJECTS_ROOT / project
         png_dir = project_root / "frames"
         bmp_dir = project_root / "bmp"
+        svg_dir = project_root / "svg"
 
         png_path = png_dir / f"frame_{frame_index:04d}.png"
         bmp_path = bmp_dir / f"frame_{frame_index:04d}.bmp"
+        svg_path = svg_dir / f"frame_{frame_index:04d}.svg"
 
         self.log(f"[Preview] Frame {frame_index} (PNG) → {png_path}")
         self.preview_png.show_image(str(png_path))
 
         self.log(f"[Preview] Frame {frame_index} (BMP) → {bmp_path}")
         self.preview_bmp.show_image(str(bmp_path))
+
+        self.log(f"[Preview] Frame {frame_index} (SVG) → {svg_path}")
+        self.preview_svg.show_svg(str(svg_path))
 
 def run():
     app = QApplication(sys.argv)
