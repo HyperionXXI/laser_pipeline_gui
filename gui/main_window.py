@@ -96,7 +96,26 @@ class MainWindow(QMainWindow):
         self.btn_bmp.clicked.connect(self.on_bmp_click)
         layout.addWidget(self.btn_bmp)
 
+        # --- Paramètres BMP ---
+        row_bmp_params = QHBoxLayout()
 
+        row_bmp_params.addWidget(QLabel("Seuil (%) :"))
+        self.spin_bmp_threshold = QSpinBox()
+        self.spin_bmp_threshold.setRange(0, 100)
+        self.spin_bmp_threshold.setValue(60)  # valeur par défaut
+        row_bmp_params.addWidget(self.spin_bmp_threshold)
+
+        self.check_bmp_thinning = QCheckBox("Thinning")
+        self.check_bmp_thinning.setChecked(False)
+        row_bmp_params.addWidget(self.check_bmp_thinning)
+
+        row_bmp_params.addWidget(QLabel("Max frames (0 = toutes) :"))
+        self.spin_bmp_max_frames = QSpinBox()
+        self.spin_bmp_max_frames.setRange(0, 100000)
+        self.spin_bmp_max_frames.setValue(0)  # 0 => pas de limite
+        row_bmp_params.addWidget(self.spin_bmp_max_frames)
+
+        layout.addLayout(row_bmp_params)
 
         # --- Bouton Potrace ---
         self.btn_potrace = QPushButton("3. Vectoriser (Potrace)")
@@ -128,22 +147,23 @@ class MainWindow(QMainWindow):
         col_png = QVBoxLayout(group_png)
 
         self.preview_png = RasterPreview()
-        self.preview_png.setMinimumSize(220, 220)
+        # Taille min commune aux 3 previews (homogénéité visuelle)
+        self.preview_png.setMinimumSize(320, 240)
         col_png.addWidget(self.preview_png)
 
         previews_row.addWidget(group_png)
 
-        # GroupBox BMP / step 2 : paramètres + preview dans la même colonne
+        # GroupBox BMP / step 2 : paramètres + preview
         group_bmp = QGroupBox("2. Bitmap (ImageMagick)")
         col_bmp = QVBoxLayout(group_bmp)
 
-        # Paramètres BMP déplacés ici
+        # Paramètres BMP dans la même colonne que la preview
         row_bmp_params = QHBoxLayout()
-        row_bmp_params.addWidget(QLabel("Seuil (%) :"))
 
+        row_bmp_params.addWidget(QLabel("Seuil (%) :"))
         self.spin_bmp_threshold = QSpinBox()
         self.spin_bmp_threshold.setRange(0, 100)
-        self.spin_bmp_threshold.setValue(60)  # valeur par défaut
+        self.spin_bmp_threshold.setValue(60)
         row_bmp_params.addWidget(self.spin_bmp_threshold)
 
         self.check_bmp_thinning = QCheckBox("Thinning")
@@ -151,33 +171,35 @@ class MainWindow(QMainWindow):
         row_bmp_params.addWidget(self.check_bmp_thinning)
 
         row_bmp_params.addWidget(QLabel("Max frames (0 = toutes) :"))
-
         self.spin_bmp_max_frames = QSpinBox()
         self.spin_bmp_max_frames.setRange(0, 100000)
-        self.spin_bmp_max_frames.setValue(0)  # 0 => pas de limite
+        self.spin_bmp_max_frames.setValue(0)
         row_bmp_params.addWidget(self.spin_bmp_max_frames)
 
         col_bmp.addLayout(row_bmp_params)
 
-        # Preview BMP
         self.preview_bmp = RasterPreview()
-        self.preview_bmp.setMinimumSize(220, 220)
+        self.preview_bmp.setMinimumSize(320, 240)
         col_bmp.addWidget(self.preview_bmp)
 
         previews_row.addWidget(group_bmp)
 
         # GroupBox SVG / step 3
-        group_svg = QGroupBox("3. Vectorisation (Potrace / SVG)")
+        group_svg = QGroupBox("3. Vectorisation (SVG)")
         col_svg = QVBoxLayout(group_svg)
 
         self.preview_svg = SvgPreview()
-        self.preview_svg.setMinimumSize(220, 220)
+        self.preview_svg.setMinimumSize(320, 240)
         col_svg.addWidget(self.preview_svg)
 
         previews_row.addWidget(group_svg)
 
-        layout.addLayout(previews_row)
+        # Même "poids" horizontal pour chaque colonne
+        previews_row.setStretch(0, 1)
+        previews_row.setStretch(1, 1)
+        previews_row.setStretch(2, 1)
 
+        layout.addLayout(previews_row)
 
         # --- Zone de log ---
         self.log_view = QTextEdit()
