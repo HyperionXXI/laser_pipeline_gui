@@ -1,13 +1,12 @@
 # gui/main_window.py
 
-
 import sys
+
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout,
     QHBoxLayout, QLabel, QLineEdit, QPushButton, QTextEdit,
-    QSpinBox, QComboBox,
+    QSpinBox,
 )
-
 
 from pathlib import Path
 
@@ -82,23 +81,39 @@ class MainWindow(QMainWindow):
         self.spin_frame.setMaximum(99999)
         row_preview.addWidget(self.spin_frame)
 
-        # Nouveau : choix de la source (PNG ou BMP)
-        row_preview.addWidget(QLabel("Source :"))
-        self.combo_source = QComboBox()
-        self.combo_source.addItems(["PNG (frames)", "BMP (bitmap)"])
-        row_preview.addWidget(self.combo_source)
-
         self.btn_preview = QPushButton("Prévisualiser frame")
         self.btn_preview.clicked.connect(self.on_preview_frame)
         row_preview.addWidget(self.btn_preview)
 
         layout.addLayout(row_preview)
 
+        # --- Zones de prévisualisation (PNG & BMP) ---
+        previews_row = QHBoxLayout()
 
-        # --- Zone de prévisualisation ---
-        self.preview = RasterPreview()
-        self.preview.setMinimumHeight(200)
-        layout.addWidget(self.preview)
+        # Colonne PNG
+        col_png = QVBoxLayout()
+        label_png = QLabel("PNG (frames)")
+        col_png.addWidget(label_png)
+
+        self.preview_png = RasterPreview()
+        self.preview_png.setMinimumSize(200, 200)
+        col_png.addWidget(self.preview_png)
+
+        previews_row.addLayout(col_png)
+
+        # Colonne BMP
+        col_bmp = QVBoxLayout()
+        label_bmp = QLabel("BMP (bitmap)")
+        col_bmp.addWidget(label_bmp)
+
+        self.preview_bmp = RasterPreview()
+        self.preview_bmp.setMinimumSize(200, 200)
+        col_bmp.addWidget(self.preview_bmp)
+
+        previews_row.addLayout(col_bmp)
+
+        layout.addLayout(previews_row)
+
 
         # --- Zone de log ---
         self.log_view = QTextEdit()
@@ -225,31 +240,26 @@ class MainWindow(QMainWindow):
         self.log(f"[Potrace] Terminé. SVG dans : {svg_out}")
 
     def on_preview_frame(self):
-        """Affiche une frame (PNG ou BMP) du projet dans le widget de prévisualisation."""
+        """Affiche la frame sélectionnée en PNG et BMP, côte à côte."""
         project = (self.edit_project.text() or "").strip()
         if not project:
             self.log("Erreur prévisualisation : nom de projet vide.")
             return
 
         frame_index = self.spin_frame.value()
-        source_mode = self.combo_source.currentText()
 
-        if source_mode.startswith("PNG"):
-            base_dir = PROJECTS_ROOT / project / "frames"
-            ext = ".png"
-            src_label = "frames (PNG)"
-        else:
-            base_dir = PROJECTS_ROOT / project / "bmp"
-            ext = ".bmp"
-            src_label = "bitmap (BMP)"
+        project_root = PROJECTS_ROOT / project
+        png_dir = project_root / "frames"
+        bmp_dir = project_root / "bmp"
 
-        filename = f"frame_{frame_index:04d}{ext}"
-        path = base_dir / filename
+        png_path = png_dir / f"frame_{frame_index:04d}.png"
+        bmp_path = bmp_dir / f"frame_{frame_index:04d}.bmp"
 
-        self.log(f"[Preview] Frame {frame_index} ({src_label}) → {path}")
-        self.preview.show_image(str(path))
+        self.log(f"[Preview] Frame {frame_index} (PNG) → {png_path}")
+        self.preview_png.show_image(str(png_path))
 
-
+        self.log(f"[Preview] Frame {frame_index} (BMP) → {bmp_path}")
+        self.preview_bmp.show_image(str(bmp_path))
 
 def run():
     app = QApplication(sys.argv)
