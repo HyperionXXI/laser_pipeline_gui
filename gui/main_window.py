@@ -6,8 +6,9 @@ import sys
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout,
     QHBoxLayout, QLabel, QLineEdit, QPushButton, QTextEdit,
-    QSpinBox, QCheckBox,
+    QSpinBox, QCheckBox, QGroupBox,
 )
+
 
 
 from pathlib import Path
@@ -95,26 +96,7 @@ class MainWindow(QMainWindow):
         self.btn_bmp.clicked.connect(self.on_bmp_click)
         layout.addWidget(self.btn_bmp)
 
-        # --- Paramètres BMP ---
-        row_bmp_params = QHBoxLayout()
 
-        row_bmp_params.addWidget(QLabel("Seuil (%) :"))
-        self.spin_bmp_threshold = QSpinBox()
-        self.spin_bmp_threshold.setRange(0, 100)
-        self.spin_bmp_threshold.setValue(60)  # valeur par défaut
-        row_bmp_params.addWidget(self.spin_bmp_threshold)
-
-        self.check_bmp_thinning = QCheckBox("Thinning")
-        self.check_bmp_thinning.setChecked(False)
-        row_bmp_params.addWidget(self.check_bmp_thinning)
-
-        row_bmp_params.addWidget(QLabel("Max frames (0 = toutes) :"))
-        self.spin_bmp_max_frames = QSpinBox()
-        self.spin_bmp_max_frames.setRange(0, 100000)
-        self.spin_bmp_max_frames.setValue(0)  # 0 => pas de limite
-        row_bmp_params.addWidget(self.spin_bmp_max_frames)
-
-        layout.addLayout(row_bmp_params)
 
         # --- Bouton Potrace ---
         self.btn_potrace = QPushButton("3. Vectoriser (Potrace)")
@@ -141,40 +123,61 @@ class MainWindow(QMainWindow):
         # --- Zones de prévisualisation (PNG, BMP, SVG) ---
         previews_row = QHBoxLayout()
 
-        # Colonne PNG
-        col_png = QVBoxLayout()
-        label_png = QLabel("PNG (frames)")
-        col_png.addWidget(label_png)
+        # GroupBox PNG / step 1
+        group_png = QGroupBox("1. FFmpeg → PNG (frames)")
+        col_png = QVBoxLayout(group_png)
 
         self.preview_png = RasterPreview()
-        self.preview_png.setMinimumSize(200, 200)
+        self.preview_png.setMinimumSize(220, 220)
         col_png.addWidget(self.preview_png)
 
-        previews_row.addLayout(col_png)
+        previews_row.addWidget(group_png)
 
-        # Colonne BMP
-        col_bmp = QVBoxLayout()
-        label_bmp = QLabel("BMP (bitmap)")
-        col_bmp.addWidget(label_bmp)
+        # GroupBox BMP / step 2 : paramètres + preview dans la même colonne
+        group_bmp = QGroupBox("2. Bitmap (ImageMagick)")
+        col_bmp = QVBoxLayout(group_bmp)
 
+        # Paramètres BMP déplacés ici
+        row_bmp_params = QHBoxLayout()
+        row_bmp_params.addWidget(QLabel("Seuil (%) :"))
+
+        self.spin_bmp_threshold = QSpinBox()
+        self.spin_bmp_threshold.setRange(0, 100)
+        self.spin_bmp_threshold.setValue(60)  # valeur par défaut
+        row_bmp_params.addWidget(self.spin_bmp_threshold)
+
+        self.check_bmp_thinning = QCheckBox("Thinning")
+        self.check_bmp_thinning.setChecked(False)
+        row_bmp_params.addWidget(self.check_bmp_thinning)
+
+        row_bmp_params.addWidget(QLabel("Max frames (0 = toutes) :"))
+
+        self.spin_bmp_max_frames = QSpinBox()
+        self.spin_bmp_max_frames.setRange(0, 100000)
+        self.spin_bmp_max_frames.setValue(0)  # 0 => pas de limite
+        row_bmp_params.addWidget(self.spin_bmp_max_frames)
+
+        col_bmp.addLayout(row_bmp_params)
+
+        # Preview BMP
         self.preview_bmp = RasterPreview()
-        self.preview_bmp.setMinimumSize(200, 200)
+        self.preview_bmp.setMinimumSize(220, 220)
         col_bmp.addWidget(self.preview_bmp)
 
-        previews_row.addLayout(col_bmp)
+        previews_row.addWidget(group_bmp)
 
-        # Colonne SVG
-        col_svg = QVBoxLayout()
-        label_svg = QLabel("SVG (vectorisé)")
-        col_svg.addWidget(label_svg)
+        # GroupBox SVG / step 3
+        group_svg = QGroupBox("3. Vectorisation (Potrace / SVG)")
+        col_svg = QVBoxLayout(group_svg)
 
         self.preview_svg = SvgPreview()
-        self.preview_svg.setMinimumSize(200, 200)
+        self.preview_svg.setMinimumSize(220, 220)
         col_svg.addWidget(self.preview_svg)
 
-        previews_row.addLayout(col_svg)
+        previews_row.addWidget(group_svg)
 
         layout.addLayout(previews_row)
+
 
         # --- Zone de log ---
         self.log_view = QTextEdit()
