@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
     QSpinBox,
     QCheckBox,
     QGroupBox,
+    QSizePolicy,
 )
 
 from core.step_ffmpeg import extract_frames
@@ -119,11 +120,13 @@ class MainWindow(QMainWindow):
         self.spin_frame.setMaximum(99999)
         row_frame.addWidget(self.spin_frame)
 
-        row_frame.addStretch()
-
+        # On met le bouton juste après le spin, sans gros espace au milieu
         self.btn_preview = QPushButton("Prévisualiser frame")
         self.btn_preview.clicked.connect(self.on_preview_frame)
         row_frame.addWidget(self.btn_preview)
+
+        row_frame.addStretch()
+
 
         pipeline_layout.addLayout(row_frame)
 
@@ -153,8 +156,9 @@ class MainWindow(QMainWindow):
         step1_prev_layout.addWidget(self.preview_png)
 
         col1.addWidget(group_step1_preview)
-
-        cols_layout.addLayout(col1)
+        col1_widget = QWidget()
+        col1_widget.setLayout(col1)
+        col1_widget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
 
         # ------------------------------------------------------------
         # Colonne 2 : Bitmap (ImageMagick)
@@ -202,8 +206,9 @@ class MainWindow(QMainWindow):
         step2_prev_layout.addWidget(self.preview_bmp)
 
         col2.addWidget(group_step2_preview)
-
-        cols_layout.addLayout(col2)
+        col2_widget = QWidget()
+        col2_widget.setLayout(col2)
+        col2_widget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
 
         # ------------------------------------------------------------
         # Colonne 3 : Vectorisation (Potrace / SVG)
@@ -228,9 +233,52 @@ class MainWindow(QMainWindow):
         step3_prev_layout.addWidget(self.preview_svg)
 
         col3.addWidget(group_step3_preview)
+        col3_widget = QWidget()
+        col3_widget.setLayout(col3)
+        col3_widget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        
+        # ------------------------------------------------------------
+        # Colonne 4 : Export ILDA (à venir)
+        # ------------------------------------------------------------
+        col4 = QVBoxLayout()
 
-        cols_layout.addLayout(col3)
+        group_step4_params = QGroupBox("4. ILDA (export)")
+        step4_layout = QVBoxLayout(group_step4_params)
 
+        # Bouton pour l’export ILDA – désactivé pour l’instant
+        self.btn_ilda = QPushButton("Exporter ILDA")
+        self.btn_ilda.setEnabled(False)  # TODO: activer quand le step sera implémenté
+        # Optionnel : connecter déjà à un stub pour loguer
+        self.btn_ilda.clicked.connect(self.on_ilda_click)
+
+        step4_layout.addWidget(self.btn_ilda)
+        step4_layout.addStretch()
+
+        col4.addWidget(group_step4_params)
+
+        group_step4_preview = QGroupBox("Prévisualisation ILDA")
+        step4_prev_layout = QVBoxLayout(group_step4_preview)
+
+        # Pour l’instant on utilise le même type de preview raster
+        self.preview_ilda = RasterPreview()
+        self.preview_ilda.setMinimumSize(240, 180)
+        step4_prev_layout.addWidget(self.preview_ilda)
+
+        col4.addWidget(group_step4_preview)
+
+        cols_layout.addLayout(col4)
+
+
+        # Ajout dans le layout horizontal avec stretch identique
+        cols_layout.addWidget(col1_widget)
+        cols_layout.addWidget(col2_widget)
+        cols_layout.addWidget(col3_widget)
+
+
+        cols_layout.setStretch(0, 1)
+        cols_layout.setStretch(1, 1)
+        cols_layout.setStretch(2, 1)
+        cols_layout.setStretch(3, 1)
         pipeline_layout.addLayout(cols_layout)
 
         main_layout.addWidget(group_pipeline)
@@ -263,6 +311,7 @@ class MainWindow(QMainWindow):
             getattr(self, "btn_potrace", None),
             getattr(self, "btn_preview", None),
             getattr(self, "btn_browse", None),
+            getattr(self, "btn_ilda", None),   # <-- ajouter ceci
         ]
 
         for w in widgets:
@@ -463,6 +512,11 @@ class MainWindow(QMainWindow):
 
         self.log(f"[Preview] Frame {frame_index} (SVG) → {svg_path}")
         self.preview_svg.show_svg(str(svg_path))
+
+    def on_ilda_click(self):
+        """Stub ILDA – sera remplacé quand le step ILDA sera implémenté."""
+        self.log("[ILDA] Export non implémenté pour l’instant.")
+
 
 
 def run():
