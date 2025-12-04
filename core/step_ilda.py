@@ -2,15 +2,13 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from pathlib import Path
+
 from typing import List, Iterable, Tuple
 import re
 import xml.etree.ElementTree as ET
 
 from pathlib import Path
 from core.config import PROJECTS_ROOT
-from collections.abc import Callable
 from dataclasses import dataclass
 
 @dataclass

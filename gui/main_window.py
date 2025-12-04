@@ -1,7 +1,6 @@
 # gui/main_window.py
 
 import sys
-from pathlib import Path
 
 from PySide6.QtCore import Qt, QObject, Signal, Slot, QThread
 from PySide6.QtWidgets import (
@@ -26,7 +25,6 @@ from core.step_ffmpeg import extract_frames
 from core.step_bitmap import convert_project_frames_to_bmp
 from core.step_potrace import bitmap_to_svg_folder
 from core.step_ilda import export_project_to_ilda
-from core.ilda_writer import write_ilda_file, IldaPoint
 from core.config import PROJECTS_ROOT
 from .preview_widgets import RasterPreview, SvgPreview
 
@@ -36,9 +34,6 @@ from .preview_widgets import RasterPreview, SvgPreview
 # ---------------------------------------------------------------------------
 
 class Worker(QObject):
-    """
-    Worker générique pour exécuter une fonction lourde dans un QThread.
-    """
     finished = Signal(object)
     error = Signal(str)
 
@@ -51,13 +46,15 @@ class Worker(QObject):
     @Slot()
     def run(self):
         try:
-            # IMPORTANT : on n'injecte PAS self dans les arguments
             result = self.func(*self.args, **self.kwargs)
         except Exception as e:
             self.error.emit(str(e))
         else:
             self.finished.emit(result)
 
+    def cancel(self):
+        """Placeholder pour un futur mécanisme d'annulation."""
+        pass
 
 
 
@@ -309,73 +306,63 @@ class MainWindow(QMainWindow):
 
         self.setCentralWidget(central)
 
-        # Pour garder les threads vivants (et pouvoir les arrêter proprement)
-        self._threads = []
+        # Gestion du worker courant
+        self._current_thread: QThread | None = None
+        self._current_worker: Worker | None = None
 
     # ------------------------------------------------------------------
     # Utilitaires UI / threads
     # ------------------------------------------------------------------
 
     def set_busy(self, busy: bool):
-        widgets = [
-            getattr(self, "btn_test", None),
-            getattr(self, "btn_ffmpeg", None),
-            getattr(self, "btn_bmp", None),
-            getattr(self, "btn_potrace", None),
-            getattr(self, "btn_preview", None),
-            getattr(self, "btn_browse", None),
-        ]
-
-        for w in widgets:
-            if w is not None:
-                w.setEnabled(not busy)
 
         if busy:
             QApplication.setOverrideCursor(Qt.WaitCursor)
             self.progress_bar.setVisible(True)
+            self.progress_bar.setRange(0, 0)   # mode indéterminé
             self.btn_cancel_task.setEnabled(True)
         else:
             QApplication.restoreOverrideCursor()
+            self.progress_bar.setRange(0, 100)
+            self.progress_bar.setValue(0)
+            self.progress_bar.setVisible(False)
             self.btn_cancel_task.setEnabled(False)
 
         QApplication.processEvents()
 
 
     def start_worker(self, func, finished_cb, step_label, *args, **kwargs):
-        """
-        Lance func(*args, **kwargs) dans un QThread.
-        """
         self.set_busy(True)
 
         thread = QThread(self)
         worker = Worker(func, *args, **kwargs)
         worker.moveToThread(thread)
 
+        def cleanup():
+            self.set_busy(False)
+            thread.quit()
+            worker.deleteLater()
+            thread.deleteLater()
+            self._current_thread = None
+            self._current_worker = None
+
         def on_finished(result):
             try:
                 finished_cb(result)
             finally:
-                self.set_busy(False)
-                thread.quit()
-                thread.wait()
-                worker.deleteLater()
-                thread.deleteLater()
+                cleanup()
 
         def on_error(message: str):
             self.log(f"[{step_label}] ERREUR : {message}")
-            self.set_busy(False)
-            thread.quit()
-            thread.wait()
-            worker.deleteLater()
-            thread.deleteLater()
+            cleanup()
 
         worker.finished.connect(on_finished)
         worker.error.connect(on_error)
         thread.started.connect(worker.run)
-        thread.start()
 
         self._current_thread = thread
         self._current_worker = worker
+        thread.start()
 
 
     def on_worker_progress(self, value: int):
@@ -405,28 +392,28 @@ class MainWindow(QMainWindow):
             self.edit_video_path.setText(path)
             self.log(f"Vidéo sélectionnée : {path}")
 
-    def stop_all_threads(self):
-        """
-        Demande à tous les QThread encore actifs de s'arrêter proprement,
-        puis attend leur fin.
-        """
-        for thread in self._threads:
-            if thread.isRunning():
-                thread.quit()
-                thread.wait()  # bloque jusqu'à arrêt du thread
-        self._threads.clear()
-
     def closeEvent(self, event):
+        """
+        On demande poliment l’arrêt du thread courant s’il existe,
+        sans jamais bloquer avec wait().
+        """
         thread = getattr(self, "_current_thread", None)
         worker = getattr(self, "_current_worker", None)
 
-        if thread is not None and thread.isRunning():
-            if worker is not None:
-                worker.cancel()
-            thread.quit()
-            thread.wait(3000)  # timeout raisonnable
+        try:
+            if thread is not None and thread.isRunning():
+                self.log("Fermeture : arrêt du traitement en cours…")
 
-        super().closeEvent(event)
+                if worker is not None and hasattr(worker, "cancel"):
+                    worker.cancel()
+
+                thread.quit()
+        except RuntimeError:
+            # QThread déjà détruit côté C++ -> on ignore
+            pass
+
+        event.accept()
+
 
     def on_test_click(self):
         """Vérifie les paramètres entrés et les affiche dans le log."""
@@ -447,7 +434,9 @@ class MainWindow(QMainWindow):
         self.log(f"FPS : {fps}")
         self.log("==========================")
 
+
     def on_ffmpeg_click(self):
+        """Lance l'extraction des frames via FFmpeg."""
         video = (self.edit_video_path.text() or "").strip()
         project = (self.edit_project.text() or "").strip()
         fps = self.spin_fps.value()
@@ -464,18 +453,17 @@ class MainWindow(QMainWindow):
         self.log(f"  Projet : {project}")
         self.log(f"  FPS    : {fps}")
 
-        def job(worker: Worker):
-            # étape 1 : on signale 0%
-            worker.report_progress(0)
-            out_dir = extract_frames(video, project, fps=fps)
-            # étape 2 : fin -> 100%
-            worker.report_progress(100)
-            return out_dir
-
         def on_finished(out_dir):
             self.log(f"[FFmpeg] Terminé. Frames dans : {out_dir}")
 
-        self.start_worker(job, on_finished, "FFmpeg")
+        self.start_worker(
+            extract_frames,   # fonction directe
+            on_finished,
+            "FFmpeg",
+            video,
+            project,
+            fps=fps,
+        )
 
 
     def on_bmp_click(self):
@@ -489,17 +477,6 @@ class MainWindow(QMainWindow):
         use_thinning = self.check_bmp_thinning.isChecked()
         max_frames_value = self.spin_bmp_max_frames.value()
         max_frames = max_frames_value if max_frames_value > 0 else None
-
-        def job(worker: Worker):
-            worker.report_progress(0)
-            bmp_dir = convert_project_frames_to_bmp(
-                project,
-                threshold=threshold,
-                use_thinning=use_thinning,
-                max_frames=max_frames,
-            )
-            worker.report_progress(100)            
-            return bmp_dir
 
         self.log(
             f"[BMP] Conversion PNG -> BMP pour le projet '{project}' "
@@ -520,6 +497,7 @@ class MainWindow(QMainWindow):
             max_frames=max_frames,
         )
 
+
     def on_potrace_click(self):
         """Vectorise les BMP du projet en SVG via Potrace."""
         project = (self.edit_project.text() or "").strip()
@@ -535,12 +513,6 @@ class MainWindow(QMainWindow):
         self.log(f"  Entrée : {bmp_dir}")
         self.log(f"  Sortie : {svg_dir}")
 
-        def job(worker: Worker):
-            worker.report_progress(0)
-            svg_out = bitmap_to_svg_folder(str(bmp_dir), str(svg_dir))
-            worker.report_progress(100)
-            return svg_out
-
         def on_finished(svg_out):
             self.log(f"[Potrace] Terminé. SVG dans : {svg_out}")
 
@@ -552,8 +524,9 @@ class MainWindow(QMainWindow):
             str(svg_dir),
         )
 
+
     def on_preview_frame(self):
-        """Affiche la frame sélectionnée en PNG, BMP et SVG, côte à côte."""
+        """Affiche la frame sélectionnée en PNG, BMP et SVG."""
         project = (self.edit_project.text() or "").strip()
         if not project:
             self.log("Erreur prévisualisation : nom de projet vide.")
@@ -580,30 +553,40 @@ class MainWindow(QMainWindow):
 
 
     def on_export_ilda_click(self):
-        """Export ILDA du projet courant."""
+        """Export ILDA à partir des SVG du projet."""
         project = (self.edit_project.text() or "").strip()
         if not project:
             self.log("Erreur ILDA : nom de projet vide.")
             return
 
-        self.log(f"[ILDA] Export du projet '{project}'...")
-
-        def job():
-            # Pas encore de cancellation/progress avancée → simple appel
-            return export_project_to_ilda(project)
+        self.log(f"[ILDA] Export ILDA pour le projet '{project}'...")
 
         def on_finished(out_path):
-            self.log(f"[ILDA] Terminé. Fichier ILDA généré : {out_path}")
+            self.log(f"[ILDA] Terminé. Fichier : {out_path}")
 
-        self.start_worker(job, on_finished, "ILDA")
+        self.start_worker(
+            export_project_to_ilda,
+            on_finished,
+            "ILDA",
+            project,
+        )
 
 
     def on_cancel_task(self):
-        worker = getattr(self, "_current_worker", None)
-        if worker is not None:
-            self.log("[UI] Annulation demandée…")
+        """Demande l'annulation du traitement en cours (si supportée)."""
+        thread = self._current_thread
+        worker = self._current_worker
+
+        if thread is None or not thread.isRunning():
+            self.log("[Task] Aucun traitement en cours à annuler.")
+            return
+
+        if worker is not None and hasattr(worker, "cancel"):
+            self.log("[Task] Annulation demandée…")
             worker.cancel()
-            self.btn_cancel_task.setEnabled(False)
+
+        # On demande l’arrêt (le nettoyage sera fait dans on_thread_finished)
+        thread.quit()
 
 def run():
     app = QApplication(sys.argv)
