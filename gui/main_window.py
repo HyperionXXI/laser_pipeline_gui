@@ -23,6 +23,8 @@ from PySide6.QtWidgets import (
 from core.step_ffmpeg import extract_frames
 from core.step_bitmap import convert_project_frames_to_bmp
 from core.step_potrace import bitmap_to_svg_folder
+from core.step_ilda import export_project_ilda
+from core.ilda_writer import write_ilda_file, IldaPoint
 from core.config import PROJECTS_ROOT
 from .preview_widgets import RasterPreview, SvgPreview
 
@@ -130,13 +132,13 @@ class MainWindow(QMainWindow):
 
         pipeline_layout.addLayout(row_frame)
 
-        # ---- Ligne : 3 colonnes (paramètres + preview) ----
+        # ---- Ligne : 4 colonnes (paramètres + preview) ----
         cols_layout = QHBoxLayout()
 
         # ------------------------------------------------------------
         # Colonne 1 : FFmpeg → PNG (frames)
         # ------------------------------------------------------------
-        col1 = QVBoxLayout()
+        col1_layout = QVBoxLayout()
 
         group_step1_params = QGroupBox("1. FFmpeg → PNG (frames)")
         step1_layout = QVBoxLayout(group_step1_params)
@@ -146,7 +148,7 @@ class MainWindow(QMainWindow):
         step1_layout.addWidget(self.btn_ffmpeg)
         step1_layout.addStretch()
 
-        col1.addWidget(group_step1_params)
+        col1_layout.addWidget(group_step1_params)
 
         group_step1_preview = QGroupBox("Prévisualisation PNG (frames)")
         step1_prev_layout = QVBoxLayout(group_step1_preview)
@@ -155,20 +157,19 @@ class MainWindow(QMainWindow):
         self.preview_png.setMinimumSize(240, 180)
         step1_prev_layout.addWidget(self.preview_png)
 
-        col1.addWidget(group_step1_preview)
+        col1_layout.addWidget(group_step1_preview)
+
         col1_widget = QWidget()
-        col1_widget.setLayout(col1)
-        col1_widget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        col1_widget.setLayout(col1_layout)
 
         # ------------------------------------------------------------
         # Colonne 2 : Bitmap (ImageMagick)
         # ------------------------------------------------------------
-        col2 = QVBoxLayout()
+        col2_layout = QVBoxLayout()
 
         group_step2_params = QGroupBox("2. Bitmap (ImageMagick)")
         step2_layout = QVBoxLayout(group_step2_params)
 
-        # Ligne paramètres Bitmap
         row_bmp_params = QHBoxLayout()
         row_bmp_params.addWidget(QLabel("Seuil (%):"))
 
@@ -190,13 +191,12 @@ class MainWindow(QMainWindow):
         row_bmp_params.addStretch()
         step2_layout.addLayout(row_bmp_params)
 
-        # Bouton de traitement Bitmap
         self.btn_bmp = QPushButton("Lancer Bitmap")
         self.btn_bmp.clicked.connect(self.on_bmp_click)
         step2_layout.addWidget(self.btn_bmp)
         step2_layout.addStretch()
 
-        col2.addWidget(group_step2_params)
+        col2_layout.addWidget(group_step2_params)
 
         group_step2_preview = QGroupBox("Prévisualisation BMP (bitmap)")
         step2_prev_layout = QVBoxLayout(group_step2_preview)
@@ -205,15 +205,15 @@ class MainWindow(QMainWindow):
         self.preview_bmp.setMinimumSize(240, 180)
         step2_prev_layout.addWidget(self.preview_bmp)
 
-        col2.addWidget(group_step2_preview)
+        col2_layout.addWidget(group_step2_preview)
+
         col2_widget = QWidget()
-        col2_widget.setLayout(col2)
-        col2_widget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        col2_widget.setLayout(col2_layout)
 
         # ------------------------------------------------------------
         # Colonne 3 : Vectorisation (Potrace / SVG)
         # ------------------------------------------------------------
-        col3 = QVBoxLayout()
+        col3_layout = QVBoxLayout()
 
         group_step3_params = QGroupBox("3. Vectorisation (Potrace)")
         step3_layout = QVBoxLayout(group_step3_params)
@@ -223,7 +223,7 @@ class MainWindow(QMainWindow):
         step3_layout.addWidget(self.btn_potrace)
         step3_layout.addStretch()
 
-        col3.addWidget(group_step3_params)
+        col3_layout.addWidget(group_step3_params)
 
         group_step3_preview = QGroupBox("Prévisualisation SVG (vectorisé)")
         step3_prev_layout = QVBoxLayout(group_step3_preview)
@@ -232,54 +232,45 @@ class MainWindow(QMainWindow):
         self.preview_svg.setMinimumSize(240, 180)
         step3_prev_layout.addWidget(self.preview_svg)
 
-        col3.addWidget(group_step3_preview)
+        col3_layout.addWidget(group_step3_preview)
+
         col3_widget = QWidget()
-        col3_widget.setLayout(col3)
-        col3_widget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
-        
+        col3_widget.setLayout(col3_layout)
+
         # ------------------------------------------------------------
-        # Colonne 4 : Export ILDA (à venir)
+        # Colonne 4 : ILDA (export)
         # ------------------------------------------------------------
-        col4 = QVBoxLayout()
+        col4_layout = QVBoxLayout()
 
         group_step4_params = QGroupBox("4. ILDA (export)")
         step4_layout = QVBoxLayout(group_step4_params)
 
-        # Bouton pour l’export ILDA – désactivé pour l’instant
         self.btn_ilda = QPushButton("Exporter ILDA")
-        self.btn_ilda.setEnabled(False)  # TODO: activer quand le step sera implémenté
-        # Optionnel : connecter déjà à un stub pour loguer
         self.btn_ilda.clicked.connect(self.on_ilda_click)
-
         step4_layout.addWidget(self.btn_ilda)
         step4_layout.addStretch()
 
-        col4.addWidget(group_step4_params)
+        col4_layout.addWidget(group_step4_params)
 
         group_step4_preview = QGroupBox("Prévisualisation ILDA")
         step4_prev_layout = QVBoxLayout(group_step4_preview)
 
-        # Pour l’instant on utilise le même type de preview raster
         self.preview_ilda = RasterPreview()
         self.preview_ilda.setMinimumSize(240, 180)
         step4_prev_layout.addWidget(self.preview_ilda)
 
-        col4.addWidget(group_step4_preview)
+        col4_layout.addWidget(group_step4_preview)
 
-        cols_layout.addLayout(col4)
+        col4_widget = QWidget()
+        col4_widget.setLayout(col4_layout)
 
+        # ---- Ajout des 4 colonnes dans le layout horizontal ----
+        for w in (col1_widget, col2_widget, col3_widget, col4_widget):
+            w.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+            cols_layout.addWidget(w, 1)  # stretch = 1 pour chacun
 
-        # Ajout dans le layout horizontal avec stretch identique
-        cols_layout.addWidget(col1_widget)
-        cols_layout.addWidget(col2_widget)
-        cols_layout.addWidget(col3_widget)
-
-
-        cols_layout.setStretch(0, 1)
-        cols_layout.setStretch(1, 1)
-        cols_layout.setStretch(2, 1)
-        cols_layout.setStretch(3, 1)
         pipeline_layout.addLayout(cols_layout)
+
 
         main_layout.addWidget(group_pipeline)
 
@@ -309,9 +300,10 @@ class MainWindow(QMainWindow):
             getattr(self, "btn_ffmpeg", None),
             getattr(self, "btn_bmp", None),
             getattr(self, "btn_potrace", None),
+            getattr(self, "btn_ilda", None),
             getattr(self, "btn_preview", None),
             getattr(self, "btn_browse", None),
-            getattr(self, "btn_ilda", None),   # <-- ajouter ceci
+
         ]
 
         for w in widgets:
@@ -513,9 +505,26 @@ class MainWindow(QMainWindow):
         self.log(f"[Preview] Frame {frame_index} (SVG) → {svg_path}")
         self.preview_svg.show_svg(str(svg_path))
 
+
     def on_ilda_click(self):
-        """Stub ILDA – sera remplacé quand le step ILDA sera implémenté."""
-        self.log("[ILDA] Export non implémenté pour l’instant.")
+        """Export ILDA à partir des SVG du projet courant."""
+        project = (self.edit_project.text() or "").strip()
+        if not project:
+            self.log("Erreur ILDA : nom de projet vide.")
+            return
+
+        self.log(f"[ILDA] Export du projet '{project}'...")
+
+        def on_finished(out_path):
+            self.log(f"[ILDA] Terminé. Fichier ILDA généré : {out_path}")
+
+        self.start_worker(
+            export_project_ilda,
+            on_finished,
+            "ILDA",
+            project,
+        )
+
 
 
 
