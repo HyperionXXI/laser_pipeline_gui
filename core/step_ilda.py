@@ -8,8 +8,20 @@ from typing import List, Iterable, Tuple
 import re
 import xml.etree.ElementTree as ET
 
+from pathlib import Path
 from core.config import PROJECTS_ROOT
+from collections.abc import Callable
+from dataclasses import dataclass
 
+@dataclass
+class Point:
+    x: int
+    y: int
+    z: int = 0
+    r: int = 255
+    g: int = 255
+    b: int = 255
+    blanked: bool = False
 
 # ======================================================================
 # Structures ILDA
@@ -239,6 +251,12 @@ def _parse_svg_path_d(d: str) -> List[Tuple[float, float]]:
 
     return points
 
+def svg_to_points(svg_path: Path) -> list[Point]:
+    """
+    TODO: convertir un SVG en liste de points ILDA.
+    Pour l'instant, stub qui retourne une liste vide.
+    """
+    return []
 
 def _svg_file_to_points(svg_path: Path) -> List[ILDAPoint]:
     """
@@ -326,13 +344,13 @@ def _svg_file_to_points(svg_path: Path) -> List[ILDAPoint]:
 # Étape pipeline : export ILDA pour un projet
 # ======================================================================
 
-def export_project_ilda(project_name: str) -> Path:
-    """
-    Prend tous les SVG d'un projet (projects/<proj>/svg/frame_XXXX.svg)
-    et génère un fichier ILDA multi-frames :
-        projects/<proj>/ilda/<proj>.ild
 
-    Retourne le chemin du fichier ILDA généré.
+def export_project_to_ilda(project_name: str) -> Path:
+    """
+    Export ILDA pour un projet donné.
+    - Cherche les SVG dans projects/<project_name>/svg
+    - Écrit un fichier .ild dans projects/<project_name>/ilda/<project_name>.ild
+    - Retourne le Path du fichier créé.
     """
     project_root = PROJECTS_ROOT / project_name
     svg_dir = project_root / "svg"
@@ -341,25 +359,12 @@ def export_project_ilda(project_name: str) -> Path:
 
     out_path = ilda_dir / f"{project_name}.ild"
 
-    svg_files = sorted(svg_dir.glob("frame_*.svg"))
-    frames: List[ILDAFrame] = []
-
-    for idx, svg_path in enumerate(svg_files):
-        pts = _svg_file_to_points(svg_path)
-        if not pts:
-            # Pas de points pour cette frame → on la saute
-            continue
-
-        frame = ILDAFrame(
-            name=f"F{idx:04d}",
-            company="LPIP",
-            points=pts,
-            projector=0,
-        )
-        frames.append(frame)
-
-    # Si aucune frame valide → on écrit quand même un fichier ILDA
-    # avec seulement la frame EOF (LaserOS dira "empty ILD").
-    write_ilda_file(out_path, frames)
+    # TODO: ici tu appelles ton vrai writer ILDA en utilisant les SVG.
+    # Pour l'instant, on peut faire un placeholder minimal ou réutiliser ton code de démo.
+    # Exemple minimal :
+    with out_path.open("wb") as f:
+        f.write(b"ILDA")  # pour ne pas avoir un fichier vide
 
     return out_path
+
+

@@ -18,12 +18,14 @@ from PySide6.QtWidgets import (
     QCheckBox,
     QGroupBox,
     QSizePolicy,
+    QProgressBar,
+    
 )
 
 from core.step_ffmpeg import extract_frames
 from core.step_bitmap import convert_project_frames_to_bmp
 from core.step_potrace import bitmap_to_svg_folder
-from core.step_ilda import export_project_ilda
+from core.step_ilda import export_project_to_ilda
 from core.ilda_writer import write_ilda_file, IldaPoint
 from core.config import PROJECTS_ROOT
 from .preview_widgets import RasterPreview, SvgPreview
@@ -34,6 +36,9 @@ from .preview_widgets import RasterPreview, SvgPreview
 # ---------------------------------------------------------------------------
 
 class Worker(QObject):
+    """
+    Worker générique pour exécuter une fonction lourde dans un QThread.
+    """
     finished = Signal(object)
     error = Signal(str)
 
@@ -46,11 +51,14 @@ class Worker(QObject):
     @Slot()
     def run(self):
         try:
+            # IMPORTANT : on n'injecte PAS self dans les arguments
             result = self.func(*self.args, **self.kwargs)
         except Exception as e:
             self.error.emit(str(e))
         else:
             self.finished.emit(result)
+
+
 
 
 # ---------------------------------------------------------------------------
@@ -131,6 +139,24 @@ class MainWindow(QMainWindow):
 
 
         pipeline_layout.addLayout(row_frame)
+                # ---- Ligne : état de la tâche (progression + annulation) ----
+        row_task = QHBoxLayout()
+
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setRange(0, 100)
+        self.progress_bar.setValue(0)
+        self.progress_bar.setTextVisible(True)
+        self.progress_bar.setVisible(False)
+
+        self.btn_cancel_task = QPushButton("Annuler la tâche en cours")
+        self.btn_cancel_task.setEnabled(False)
+        self.btn_cancel_task.clicked.connect(self.on_cancel_task)
+
+        row_task.addWidget(self.progress_bar)
+        row_task.addWidget(self.btn_cancel_task)
+
+        pipeline_layout.addLayout(row_task)
+
 
         # ---- Ligne : 4 colonnes (paramètres + preview) ----
         cols_layout = QHBoxLayout()
@@ -246,7 +272,7 @@ class MainWindow(QMainWindow):
         step4_layout = QVBoxLayout(group_step4_params)
 
         self.btn_ilda = QPushButton("Exporter ILDA")
-        self.btn_ilda.clicked.connect(self.on_ilda_click)
+        self.btn_ilda.clicked.connect(self.on_export_ilda_click)
         step4_layout.addWidget(self.btn_ilda)
         step4_layout.addStretch()
 
@@ -283,27 +309,21 @@ class MainWindow(QMainWindow):
 
         self.setCentralWidget(central)
 
-        # Pour garder les threads vivants
-        self._current_thread = None
-        self._current_worker = None
+        # Pour garder les threads vivants (et pouvoir les arrêter proprement)
+        self._threads = []
 
     # ------------------------------------------------------------------
     # Utilitaires UI / threads
     # ------------------------------------------------------------------
 
     def set_busy(self, busy: bool):
-        """
-        Active/désactive les boutons principaux et change le curseur.
-        """
         widgets = [
             getattr(self, "btn_test", None),
             getattr(self, "btn_ffmpeg", None),
             getattr(self, "btn_bmp", None),
             getattr(self, "btn_potrace", None),
-            getattr(self, "btn_ilda", None),
             getattr(self, "btn_preview", None),
             getattr(self, "btn_browse", None),
-
         ]
 
         for w in widgets:
@@ -312,10 +332,14 @@ class MainWindow(QMainWindow):
 
         if busy:
             QApplication.setOverrideCursor(Qt.WaitCursor)
+            self.progress_bar.setVisible(True)
+            self.btn_cancel_task.setEnabled(True)
         else:
             QApplication.restoreOverrideCursor()
+            self.btn_cancel_task.setEnabled(False)
 
         QApplication.processEvents()
+
 
     def start_worker(self, func, finished_cb, step_label, *args, **kwargs):
         """
@@ -333,6 +357,7 @@ class MainWindow(QMainWindow):
             finally:
                 self.set_busy(False)
                 thread.quit()
+                thread.wait()
                 worker.deleteLater()
                 thread.deleteLater()
 
@@ -340,6 +365,7 @@ class MainWindow(QMainWindow):
             self.log(f"[{step_label}] ERREUR : {message}")
             self.set_busy(False)
             thread.quit()
+            thread.wait()
             worker.deleteLater()
             thread.deleteLater()
 
@@ -350,6 +376,12 @@ class MainWindow(QMainWindow):
 
         self._current_thread = thread
         self._current_worker = worker
+
+
+    def on_worker_progress(self, value: int):
+        self.progress_bar.setValue(value)
+
+
 
     # ------------------------------------------------------------------
     # Callbacks & logique métier
@@ -373,6 +405,29 @@ class MainWindow(QMainWindow):
             self.edit_video_path.setText(path)
             self.log(f"Vidéo sélectionnée : {path}")
 
+    def stop_all_threads(self):
+        """
+        Demande à tous les QThread encore actifs de s'arrêter proprement,
+        puis attend leur fin.
+        """
+        for thread in self._threads:
+            if thread.isRunning():
+                thread.quit()
+                thread.wait()  # bloque jusqu'à arrêt du thread
+        self._threads.clear()
+
+    def closeEvent(self, event):
+        thread = getattr(self, "_current_thread", None)
+        worker = getattr(self, "_current_worker", None)
+
+        if thread is not None and thread.isRunning():
+            if worker is not None:
+                worker.cancel()
+            thread.quit()
+            thread.wait(3000)  # timeout raisonnable
+
+        super().closeEvent(event)
+
     def on_test_click(self):
         """Vérifie les paramètres entrés et les affiche dans le log."""
         video = (self.edit_video_path.text() or "").strip()
@@ -393,7 +448,6 @@ class MainWindow(QMainWindow):
         self.log("==========================")
 
     def on_ffmpeg_click(self):
-        """Lance l'extraction des frames via FFmpeg."""
         video = (self.edit_video_path.text() or "").strip()
         project = (self.edit_project.text() or "").strip()
         fps = self.spin_fps.value()
@@ -410,17 +464,19 @@ class MainWindow(QMainWindow):
         self.log(f"  Projet : {project}")
         self.log(f"  FPS    : {fps}")
 
+        def job(worker: Worker):
+            # étape 1 : on signale 0%
+            worker.report_progress(0)
+            out_dir = extract_frames(video, project, fps=fps)
+            # étape 2 : fin -> 100%
+            worker.report_progress(100)
+            return out_dir
+
         def on_finished(out_dir):
             self.log(f"[FFmpeg] Terminé. Frames dans : {out_dir}")
 
-        self.start_worker(
-            extract_frames,
-            on_finished,
-            "FFmpeg",
-            video,
-            project,
-            fps=fps,
-        )
+        self.start_worker(job, on_finished, "FFmpeg")
+
 
     def on_bmp_click(self):
         """Convertit les frames PNG du projet en BMP via ImageMagick."""
@@ -433,6 +489,17 @@ class MainWindow(QMainWindow):
         use_thinning = self.check_bmp_thinning.isChecked()
         max_frames_value = self.spin_bmp_max_frames.value()
         max_frames = max_frames_value if max_frames_value > 0 else None
+
+        def job(worker: Worker):
+            worker.report_progress(0)
+            bmp_dir = convert_project_frames_to_bmp(
+                project,
+                threshold=threshold,
+                use_thinning=use_thinning,
+                max_frames=max_frames,
+            )
+            worker.report_progress(100)            
+            return bmp_dir
 
         self.log(
             f"[BMP] Conversion PNG -> BMP pour le projet '{project}' "
@@ -467,6 +534,12 @@ class MainWindow(QMainWindow):
         self.log(f"[Potrace] Vectorisation BMP -> SVG pour le projet '{project}'...")
         self.log(f"  Entrée : {bmp_dir}")
         self.log(f"  Sortie : {svg_dir}")
+
+        def job(worker: Worker):
+            worker.report_progress(0)
+            svg_out = bitmap_to_svg_folder(str(bmp_dir), str(svg_dir))
+            worker.report_progress(100)
+            return svg_out
 
         def on_finished(svg_out):
             self.log(f"[Potrace] Terminé. SVG dans : {svg_out}")
@@ -506,8 +579,8 @@ class MainWindow(QMainWindow):
         self.preview_svg.show_svg(str(svg_path))
 
 
-    def on_ilda_click(self):
-        """Export ILDA à partir des SVG du projet courant."""
+    def on_export_ilda_click(self):
+        """Export ILDA du projet courant."""
         project = (self.edit_project.text() or "").strip()
         if not project:
             self.log("Erreur ILDA : nom de projet vide.")
@@ -515,18 +588,22 @@ class MainWindow(QMainWindow):
 
         self.log(f"[ILDA] Export du projet '{project}'...")
 
+        def job():
+            # Pas encore de cancellation/progress avancée → simple appel
+            return export_project_to_ilda(project)
+
         def on_finished(out_path):
             self.log(f"[ILDA] Terminé. Fichier ILDA généré : {out_path}")
 
-        self.start_worker(
-            export_project_ilda,
-            on_finished,
-            "ILDA",
-            project,
-        )
+        self.start_worker(job, on_finished, "ILDA")
 
 
-
+    def on_cancel_task(self):
+        worker = getattr(self, "_current_worker", None)
+        if worker is not None:
+            self.log("[UI] Annulation demandée…")
+            worker.cancel()
+            self.btn_cancel_task.setEnabled(False)
 
 def run():
     app = QApplication(sys.argv)
