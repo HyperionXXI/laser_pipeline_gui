@@ -1,6 +1,9 @@
 # gui/main_window.py
 
 import sys
+import os
+import re
+from pathlib import Path
 
 from PySide6.QtCore import Qt, QObject, Signal, Slot, QThread
 from PySide6.QtWidgets import (
@@ -18,9 +21,10 @@ from PySide6.QtWidgets import (
     QGroupBox,
     QSizePolicy,
     QProgressBar,
-    
+    QComboBox,    
 )
 
+from core.ilda_preview import render_ilda_frame_to_png
 from core.step_ffmpeg import extract_frames
 from core.step_bitmap import convert_project_frames_to_bmp
 from core.step_potrace import bitmap_to_svg_folder
@@ -113,7 +117,7 @@ class MainWindow(QMainWindow):
 
         # ================================================================
         # 2) GROUPE : PIPELINE VIDÉO → VECTEUR
-        #    → 3 colonnes : (1) FFmpeg, (2) Bitmap, (3) Vectorisation
+        #    → 4 colonnes : (1) FFmpeg, (2) Bitmap, (3) Vectorisation, (4) ILDA
         # ================================================================
         group_pipeline = QGroupBox("Pipeline vidéo → vecteur")
         pipeline_layout = QVBoxLayout(group_pipeline)
@@ -136,7 +140,8 @@ class MainWindow(QMainWindow):
 
 
         pipeline_layout.addLayout(row_frame)
-                # ---- Ligne : état de la tâche (progression + annulation) ----
+        
+        # ---- Ligne : état de la tâche (progression + annulation) ----
         row_task = QHBoxLayout()
 
         self.progress_bar = QProgressBar()
@@ -265,9 +270,41 @@ class MainWindow(QMainWindow):
         # ------------------------------------------------------------
         col4_layout = QVBoxLayout()
 
+
         group_step4_params = QGroupBox("4. ILDA (export)")
         step4_layout = QVBoxLayout(group_step4_params)
 
+        # Ligne 1 : ajustement (fit axis)
+        row_ilda_fit = QHBoxLayout()
+        row_ilda_fit.addWidget(QLabel("Ajustement :"))
+        self.combo_ilda_fit_axis = QComboBox()
+        self.combo_ilda_fit_axis.addItems([
+            "Max des deux axes",
+            "Ajuster sur largeur (X)",
+            "Ajuster sur hauteur (Y)",
+        ])
+        row_ilda_fit.addWidget(self.combo_ilda_fit_axis)
+        step4_layout.addLayout(row_ilda_fit)
+
+        # Ligne 2 : fill ratio
+        row_ilda_fill = QHBoxLayout()
+        row_ilda_fill.addWidget(QLabel("Fill (%) :"))
+        self.spin_ilda_fill = QSpinBox()
+        self.spin_ilda_fill.setRange(10, 100)
+        self.spin_ilda_fill.setValue(95)
+        row_ilda_fill.addWidget(self.spin_ilda_fill)
+        step4_layout.addLayout(row_ilda_fill)
+
+        # Ligne 3 : min size (anti-poussière)
+        row_ilda_min = QHBoxLayout()
+        row_ilda_min.addWidget(QLabel("Min taille (%) :"))
+        self.spin_ilda_min_size = QSpinBox()
+        self.spin_ilda_min_size.setRange(0, 50)
+        self.spin_ilda_min_size.setValue(1)   # 1% par défaut
+        row_ilda_min.addWidget(self.spin_ilda_min_size)
+        step4_layout.addLayout(row_ilda_min)
+
+        # Bouton Export
         self.btn_ilda = QPushButton("Exporter ILDA")
         self.btn_ilda.clicked.connect(self.on_export_ilda_click)
         step4_layout.addWidget(self.btn_ilda)
@@ -286,6 +323,8 @@ class MainWindow(QMainWindow):
 
         col4_widget = QWidget()
         col4_widget.setLayout(col4_layout)
+
+        # ICI il manque la création de col4_widget
 
         # ---- Ajout des 4 colonnes dans le layout horizontal ----
         for w in (col1_widget, col2_widget, col3_widget, col4_widget):
@@ -440,6 +479,9 @@ class MainWindow(QMainWindow):
         video = (self.edit_video_path.text() or "").strip()
         project = (self.edit_project.text() or "").strip()
         fps = self.spin_fps.value()
+        project_root = PROJECTS_ROOT / project
+
+        self.log("[FFmpeg] Démarrage extraction frames...")
 
         if not video:
             self.log("Erreur FFmpeg : aucun fichier vidéo sélectionné.")
@@ -455,9 +497,14 @@ class MainWindow(QMainWindow):
 
         def on_finished(out_dir):
             self.log(f"[FFmpeg] Terminé. Frames dans : {out_dir}")
+            # on force la prévisualisation sur la DERNIÈRE frame PNG existante
+            last_idx = self._find_last_frame_index(project_root / "frames", "png")
+            if last_idx is not None:
+                self.spin_frame.setValue(last_idx)
+            self.update_previews_for_current_frame()
 
         self.start_worker(
-            extract_frames,   # fonction directe
+            extract_frames,
             on_finished,
             "FFmpeg",
             video,
@@ -472,6 +519,7 @@ class MainWindow(QMainWindow):
         if not project:
             self.log("Erreur BMP : nom de projet vide.")
             return
+        project_root = PROJECTS_ROOT / project
 
         threshold = self.spin_bmp_threshold.value()
         use_thinning = self.check_bmp_thinning.isChecked()
@@ -486,6 +534,10 @@ class MainWindow(QMainWindow):
 
         def on_finished(bmp_dir):
             self.log(f"[BMP] Terminé. BMP dans : {bmp_dir}")
+            last_idx = self._find_last_frame_index(project_root / "bmp", "bmp")
+            if last_idx is not None:
+                self.spin_frame.setValue(last_idx)
+            self.update_previews_for_current_frame()
 
         self.start_worker(
             convert_project_frames_to_bmp,
@@ -515,6 +567,10 @@ class MainWindow(QMainWindow):
 
         def on_finished(svg_out):
             self.log(f"[Potrace] Terminé. SVG dans : {svg_out}")
+            last_idx = self._find_last_frame_index(svg_dir, "svg")
+            if last_idx is not None:
+                self.spin_frame.setValue(last_idx)
+            self.update_previews_for_current_frame()
 
         self.start_worker(
             bitmap_to_svg_folder,
@@ -524,9 +580,32 @@ class MainWindow(QMainWindow):
             str(svg_dir),
         )
 
+    def _find_last_frame_index(self, dir_path: Path, suffix: str) -> int | None:
+        """
+        Cherche la plus grande valeur de N telle qu'un fichier
+        frame_NNNN.<suffix> existe dans dir_path.
+        Retourne None si rien n'est trouvé.
+        """
+        if not dir_path.exists():
+            return None
 
-    def on_preview_frame(self):
-        """Affiche la frame sélectionnée en PNG, BMP et SVG."""
+        pattern = re.compile(r"^frame_(\d+)\." + re.escape(suffix) + r"$")
+        max_idx = 0
+
+        for entry in dir_path.iterdir():
+            if not entry.is_file():
+                continue
+            m = pattern.match(entry.name)
+            if not m:
+                continue
+            idx = int(m.group(1))
+            if idx > max_idx:
+                max_idx = idx
+
+        return max_idx or None
+
+    def update_previews_for_current_frame(self):
+        """Affiche la frame sélectionnée en PNG, BMP, SVG (et placeholder ILDA)."""
         project = (self.edit_project.text() or "").strip()
         if not project:
             self.log("Erreur prévisualisation : nom de projet vide.")
@@ -537,19 +616,33 @@ class MainWindow(QMainWindow):
         png_dir = project_root / "frames"
         bmp_dir = project_root / "bmp"
         svg_dir = project_root / "svg"
+        ilda_dir = project_root / "ilda"
 
         png_path = png_dir / f"frame_{frame_index:04d}.png"
         bmp_path = bmp_dir / f"frame_{frame_index:04d}.bmp"
         svg_path = svg_dir / f"frame_{frame_index:04d}.svg"
 
+        # PNG
         self.log(f"[Preview] Frame {frame_index} (PNG) → {png_path}")
         self.preview_png.show_image(str(png_path))
 
+        # BMP
         self.log(f"[Preview] Frame {frame_index} (BMP) → {bmp_path}")
         self.preview_bmp.show_image(str(bmp_path))
 
+        # SVG
         self.log(f"[Preview] Frame {frame_index} (SVG) → {svg_path}")
         self.preview_svg.show_svg(str(svg_path))
+
+        # ILDA : pour l’instant on réutilise l’image PNG comme approximation
+        self.log(f"[Preview] Frame {frame_index} (ILDA approx) → {png_path}")
+        self.preview_ilda.show_image(str(png_path))
+
+
+    def on_preview_frame(self):
+        """Slot du bouton 'Prévisualiser frame'."""
+        self.update_previews_for_current_frame()
+
 
 
     def on_export_ilda_click(self):
@@ -558,19 +651,47 @@ class MainWindow(QMainWindow):
         if not project:
             self.log("Erreur ILDA : nom de projet vide.")
             return
+        
+        project_root = PROJECTS_ROOT / project   # <<< AJOUT
 
-        self.log(f"[ILDA] Export ILDA pour le projet '{project}'...")
+        # Récupère les paramètres GUI
+        fit_text = self.combo_ilda_fit_axis.currentText()
+        if "largeur" in fit_text:
+            fit_axis = "x"
+        elif "hauteur" in fit_text:
+            fit_axis = "y"
+        else:
+            fit_axis = "max"
+
+        fill_ratio = self.spin_ilda_fill.value() / 100.0
+        min_rel_size = self.spin_ilda_min_size.value() / 100.0
+
+        self.log(
+            f"[ILDA] Export ILDA pour le projet '{project}' "
+            f"(fit_axis={fit_axis}, fill={fill_ratio:.2f}, "
+            f"min_size={min_rel_size:.3f})..."
+        )
 
         def on_finished(out_path):
+            # on garde la même frame que la dernière SVG,
+            # ce sera aussi la dernière frame ILDA
+            last_idx = self._find_last_frame_index(project_root / "svg", "svg")
+            if last_idx is not None:
+                self.spin_frame.setValue(last_idx)
             self.log(f"[ILDA] Terminé. Fichier : {out_path}")
+            # met à jour toutes les prévisualisations sur la frame courante
+            self.update_previews_for_current_frame()
 
+        # Worker : on passe les paramètres supplémentaires
         self.start_worker(
             export_project_to_ilda,
             on_finished,
             "ILDA",
             project,
+            fit_axis=fit_axis,
+            fill_ratio=fill_ratio,
+            min_rel_size=min_rel_size,
         )
-
 
     def on_cancel_task(self):
         """Demande l'annulation du traitement en cours (si supportée)."""

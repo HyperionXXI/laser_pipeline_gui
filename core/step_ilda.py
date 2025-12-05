@@ -481,11 +481,13 @@ def _compute_bounds(frames_paths: List[List[List[Tuple[float, float]]]]
     return min(xs), max(xs), min(ys), max(ys)
 
 
-def _paths_to_ilda_points(paths: List[List[Tuple[float, float]]],
-                          bounds: Tuple[float, float, float, float],
-                          min_rel_size: float = 0.01,
-                          fill_ratio: float = 0.95,
-                          ) -> List[ILDAPoint]:
+def _paths_to_ilda_points(
+    paths: List[List[Tuple[float, float]]],
+    bounds: Tuple[float, float, float, float],
+    min_rel_size: float = 0.01,
+    fill_ratio: float = 0.95,
+    fit_axis: str = "max",   # "max" (défaut), "x" ou "y"
+) -> List[ILDAPoint]:
     """
     Normalise des chemins (liste de listes de (x,y)) dans l'espace ILDA.
 
@@ -495,14 +497,23 @@ def _paths_to_ilda_points(paths: List[List[Tuple[float, float]]],
     - supprime les paths trop petits (lignes parasites) :
       taille < min_rel_size * taille_globale
     - fill_ratio : fraction de la fenêtre ILDA utilisée (0.0..1.0)
+    - fit_axis : "max" (comportement actuel), "x" (remplit la largeur),
+                 "y" (remplit la hauteur)
     """
     min_x, max_x, min_y, max_y = bounds
     span_x = max_x - min_x or 1.0
     span_y = max_y - min_y or 1.0
     global_span = max(span_x, span_y)
 
-    # marge (ex: 0.95 = 95 % de la fenêtre ILDA)
-    scale = (32767 * fill_ratio) / global_span
+    # Choix de l’axe de référence pour le scale
+    if fit_axis == "x":
+        base_span = span_x
+    elif fit_axis == "y":
+        base_span = span_y
+    else:
+        base_span = global_span
+
+    scale = (32767 * fill_ratio) / base_span
     cx = (min_x + max_x) / 2.0
     cy = (min_y + max_y) / 2.0
 
@@ -546,7 +557,6 @@ def svg_to_points(svg_path: Path) -> List[ILDAPoint]:
     """
     API simple : convertit un fichier SVG isolé en liste de ILDAPoint.
     Utilise la bounding box de CE seul fichier pour la normalisation.
-    (Pratique pour des tests unitaires ou des images indépendantes.)
     """
     paths = _load_svg_paths(Path(svg_path))
     if not paths:
@@ -561,6 +571,9 @@ def svg_to_points(svg_path: Path) -> List[ILDAPoint]:
 
 def export_project_to_ilda(
     project_name: str,
+    fit_axis: str = "max",
+    fill_ratio: float = 0.95,
+    min_rel_size: float = 0.01,
     check_cancel: Callable[[], bool] | None = None,
     report_progress: Callable[[int], None] | None = None,
 ) -> Path:
@@ -616,7 +629,13 @@ def export_project_to_ilda(
         if check_cancel is not None and check_cancel():
             raise RuntimeError("Export ILDA annulé par l'utilisateur (phase 2).")
 
-        ilda_points = _paths_to_ilda_points(paths, bounds)
+        ilda_points = _paths_to_ilda_points(
+            paths,
+            bounds,
+            min_rel_size=min_rel_size,
+            fill_ratio=fill_ratio,
+            fit_axis=fit_axis,
+            )
 
         frame = ILDAFrame(
             name=f"F{idx:04d}",
