@@ -2,6 +2,12 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
+from core.pipeline.base import FrameProgress
+from core.config import PROJECTS_ROOT
+from core.step_potrace import bitmap_to_svg_folder
+from core.step_ilda import export_project_to_ilda
+from .preview_widgets import RasterPreview, SvgPreview
+from .pipeline_controller import PipelineController
 
 from PySide6.QtCore import Qt, Slot
 from PySide6.QtWidgets import (
@@ -20,13 +26,6 @@ from PySide6.QtWidgets import (
     QSizePolicy,
     QProgressBar,
 )
-
-from core.config import PROJECTS_ROOT
-from core.step_potrace import bitmap_to_svg_folder
-from core.step_ilda import export_project_to_ilda
-from .preview_widgets import RasterPreview, SvgPreview
-from .pipeline_controller import PipelineController
-
 
 class MainWindow(QMainWindow):
     def __init__(self) -> None:
@@ -272,22 +271,28 @@ class MainWindow(QMainWindow):
     @Slot(str, object)
     def on_step_finished(self, step_name: str, result) -> None:
         self.set_busy(False)
+
         msg = getattr(result, "message", "")
-        self.log(f"[{step_name}] {msg}")
+        if msg:
+            self.log(f"[{step_name}] {msg}")
 
         out_dir = getattr(result, "output_dir", None)
-        if out_dir:
-            # On met à jour la prévisualisation correspondante avec la dernière frame
-            try:
-                last = self._find_last_frame(Path(out_dir))
-            except Exception:
-                last = None
+        if not out_dir:
+            return
 
+        out_dir = Path(out_dir)
+
+        if step_name == "ffmpeg":
+            last = self._find_last_frame(out_dir, pattern="frame_*.png")
             if last:
-                if step_name == "ffmpeg":
-                    self.preview_png.show_image(str(last))
-                elif step_name == "bitmap":
-                    self.preview_bmp.show_image(str(last))
+                self.preview_png.show_image(str(last))
+                self.log(f"[{step_name}] Prévisualisation PNG : {last}")
+
+        elif step_name == "bitmap":
+            last = self._find_last_frame(out_dir, pattern="frame_*.bmp")
+            if last:
+                self.preview_bmp.show_image(str(last))
+                self.log(f"[{step_name}] Prévisualisation BMP : {last}")
 
     @Slot(str, str)
     def on_step_error(self, step_name: str, message: str) -> None:
@@ -295,12 +300,49 @@ class MainWindow(QMainWindow):
         self.log(f"[{step_name}] ERREUR : {message}")
 
     @Slot(str, object)
-    def on_step_progress(self, step_name: str, fp) -> None:
-        # Pour l'instant, on se contente de logger le message éventuel.
-        msg = getattr(fp, "message", "")
-        if msg:
-            self.log(f"[{step_name}] {msg}")
-        # On pourra brancher ici une vraie progression si total_frames est renseigné.
+    def on_step_progress(self, step_name: str, fp_obj: object) -> None:
+        """
+        Appelé à chaque progression d'un step (FFmpeg, Bitmap, Potrace, ...).
+
+        Utilise FrameProgress.frame_path pour afficher la frame courante,
+        et FrameProgress.frame_index / total_frames pour la barre de progression.
+        """
+        # On vérifie qu'on a bien un FrameProgress
+        if not isinstance(fp_obj, FrameProgress):
+            return
+
+        fp: FrameProgress = fp_obj
+
+        # 0) Message optionnel
+        if fp.message:
+            self.log(f"[{step_name}] {fp.message}")
+
+        # 1) Barre de progression (si on connaît le nombre total)
+        if fp.total_frames is not None and fp.total_frames > 0:
+            self.progress_bar.setRange(0, 100)
+            percent = int(fp.frame_index * 100 / fp.total_frames)
+            self.progress_bar.setValue(percent)
+
+        # 2) Prévisualisation en temps réel (frame courante)
+        if fp.frame_path:
+            path = Path(fp.frame_path)
+
+            if step_name == "ffmpeg":
+                # PNG en cours d'extraction
+                self.preview_png.show_image(str(path))
+
+            elif step_name == "bitmap":
+                # BMP en cours de génération
+                self.preview_bmp.show_image(str(path))
+
+            elif step_name == "potrace":
+                # plus tard : SVG en cours de vectorisation
+                self.preview_svg.show_svg(str(path))
+
+        # On laisse respirer l'event loop Qt
+        QApplication.processEvents()
+
+
 
     # ------------------------------------------------------------------
     # Callbacks UI
@@ -380,28 +422,16 @@ class MainWindow(QMainWindow):
             max_frames=max_frames,
         )
 
-    def on_potrace_click(self) -> None:
+    def on_potrace_click(self):
+        """Lance la vectorisation BMP -> SVG via Potrace (pipeline)."""
         project = (self.edit_project.text() or "").strip()
         if not project:
             self.log("Erreur Potrace : nom de projet vide.")
             return
 
-        project_root = PROJECTS_ROOT / project
-        bmp_dir = project_root / "bmp"
-        svg_dir = project_root / "svg"
-
         self.log(f"[Potrace] Vectorisation BMP -> SVG pour le projet '{project}'...")
-        self.log(f"  Entrée : {bmp_dir}")
-        self.log(f"  Sortie : {svg_dir}")
+        self.pipeline.start_potrace(project)
 
-        # appel synchrone (rapide), pas de pipeline pour l'instant
-        svg_out = bitmap_to_svg_folder(str(bmp_dir), str(svg_dir))
-        self.log(f"[Potrace] Terminé. SVG dans : {svg_out}")
-
-        # Mise à jour prévisualisation : on prend la dernière frame SVG
-        last_svg = self._find_last_frame(svg_dir, pattern="frame_*.svg")
-        if last_svg:
-            self.preview_svg.show_svg(str(last_svg))
 
     def on_export_ilda_click(self) -> None:
         project = (self.edit_project.text() or "").strip()

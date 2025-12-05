@@ -9,6 +9,7 @@ Interface graphique expérimentale pour transformer une vidéo en animation lase
 
 Le projet est pensé comme un banc d’essai pour automatiser la préparation de contenus laser (par exemple pour LaserOS / LaserCubes), avec une approche modulaire et des étapes bien séparées.
 
+Le format ILDA est un format de fichier standardisé (.ild) défini par l’International Laser Display Association pour stocker et échanger des images et animations vectorielles destinées aux projecteurs laser (positions des points et couleurs).
 ---
 
 ## Fonctionnalités

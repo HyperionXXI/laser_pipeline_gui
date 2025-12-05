@@ -8,8 +8,8 @@ from PySide6.QtCore import QObject, QThread, Signal, Slot
 
 from core.pipeline.ffmpeg_step import run_ffmpeg_step
 from core.pipeline.bitmap_step import run_bitmap_step
+from core.pipeline.potrace_step import run_potrace_step
 from core.pipeline.base import FrameProgress, StepResult
-
 
 # Type alias: fonction de log appelée par le contrôleur
 LogFn = Callable[[str], None]
@@ -167,5 +167,11 @@ class PipelineController(QObject):
             use_thinning=use_thinning,
             max_frames=max_frames,
         )
+
+    def start_potrace(self, project_name: str) -> None:
+        """
+        Lance la vectorisation Potrace (BMP -> SVG) dans un QThread.
+        """
+        self._start_step("potrace", run_potrace_step, project_name)
 
     # Les étapes Potrace et ILDA pourront être ajoutées dans le même style plus tard.
