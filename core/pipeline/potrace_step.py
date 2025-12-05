@@ -13,7 +13,7 @@ from .base import (
 )
 from core.config import PROJECTS_ROOT
 from core.step_potrace import bitmap_to_svg_folder
-
+from core.pipeline.base import StepResult, FrameProgress, ProgressCallback, CancelCallback
 
 def run_potrace_step(
     project: str,

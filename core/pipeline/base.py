@@ -1,3 +1,4 @@
+# core/pipeline/base.py
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -10,7 +11,7 @@ class FrameProgress:
     """
     Représente l'avancement d'un step.
 
-    - step_name    : étiquette du step ("ffmpeg", "bitmap", ...)
+    - step_name    : étiquette du step ("ffmpeg", "bitmap", "potrace", ...)
     - message      : texte optionnel pour le log
     - frame_index  : index de frame déjà traitée (0-based ou 1-based)
     - total_frames : nombre total de frames si connu, sinon None

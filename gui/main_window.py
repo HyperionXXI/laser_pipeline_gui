@@ -270,29 +270,15 @@ class MainWindow(QMainWindow):
 
     @Slot(str, object)
     def on_step_finished(self, step_name: str, result) -> None:
+        """
+        Step terminé (succès). On arrête le mode busy et on log le message final.
+        Les previews image par image sont déjà gérées par on_step_progress.
+        """
         self.set_busy(False)
 
         msg = getattr(result, "message", "")
         if msg:
             self.log(f"[{step_name}] {msg}")
-
-        out_dir = getattr(result, "output_dir", None)
-        if not out_dir:
-            return
-
-        out_dir = Path(out_dir)
-
-        if step_name == "ffmpeg":
-            last = self._find_last_frame(out_dir, pattern="frame_*.png")
-            if last:
-                self.preview_png.show_image(str(last))
-                self.log(f"[{step_name}] Prévisualisation PNG : {last}")
-
-        elif step_name == "bitmap":
-            last = self._find_last_frame(out_dir, pattern="frame_*.bmp")
-            if last:
-                self.preview_bmp.show_image(str(last))
-                self.log(f"[{step_name}] Prévisualisation BMP : {last}")
 
     @Slot(str, str)
     def on_step_error(self, step_name: str, message: str) -> None:
@@ -300,48 +286,32 @@ class MainWindow(QMainWindow):
         self.log(f"[{step_name}] ERREUR : {message}")
 
     @Slot(str, object)
-    def on_step_progress(self, step_name: str, fp_obj: object) -> None:
-        """
-        Appelé à chaque progression d'un step (FFmpeg, Bitmap, Potrace, ...).
-
-        Utilise FrameProgress.frame_path pour afficher la frame courante,
-        et FrameProgress.frame_index / total_frames pour la barre de progression.
-        """
-        # On vérifie qu'on a bien un FrameProgress
-        if not isinstance(fp_obj, FrameProgress):
+    def on_step_progress(self, step_name: str, payload: object) -> None:
+        if not isinstance(payload, FrameProgress):
             return
 
-        fp: FrameProgress = fp_obj
+        fp: FrameProgress = payload
 
-        # 0) Message optionnel
-        if fp.message:
-            self.log(f"[{step_name}] {fp.message}")
-
-        # 1) Barre de progression (si on connaît le nombre total)
+        # 1) Progress bar
         if fp.total_frames is not None and fp.total_frames > 0:
             self.progress_bar.setRange(0, 100)
-            percent = int(fp.frame_index * 100 / fp.total_frames)
+            percent = int((fp.frame_index + 1) * 100 / fp.total_frames)
             self.progress_bar.setValue(percent)
+        else:
+            self.progress_bar.setRange(0, 0)  # indéterminé
 
-        # 2) Prévisualisation en temps réel (frame courante)
-        if fp.frame_path:
-            path = Path(fp.frame_path)
+        # 2) Preview progressive
+        if not fp.frame_path:
+            return
 
-            if step_name == "ffmpeg":
-                # PNG en cours d'extraction
-                self.preview_png.show_image(str(path))
+        path_str = str(fp.frame_path)
 
-            elif step_name == "bitmap":
-                # BMP en cours de génération
-                self.preview_bmp.show_image(str(path))
-
-            elif step_name == "potrace":
-                # plus tard : SVG en cours de vectorisation
-                self.preview_svg.show_svg(str(path))
-
-        # On laisse respirer l'event loop Qt
-        QApplication.processEvents()
-
+        if step_name == "ffmpeg":
+            self.preview_png.show_image(path_str)
+        elif step_name == "bitmap":
+            self.preview_bmp.show_image(path_str)
+        elif step_name == "potrace":
+            self.preview_svg.show_svg(path_str)
 
 
     # ------------------------------------------------------------------

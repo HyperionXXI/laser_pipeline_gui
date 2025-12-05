@@ -1,3 +1,4 @@
+# core/pipeline/ffmpeg_step.py
 from __future__ import annotations
 
 from pathlib import Path
@@ -34,9 +35,6 @@ def run_ffmpeg_step(
             )
         )
 
-    # Pas de gestion fine du cancel ici : si cancel_cb() renvoie True pendant
-    # l'appel à ffmpeg, on ne peut pas vraiment interrompre proprement.
-    # Ce sera pour une évolution future (gestion de subprocess).
     out_dir = extract_frames(video_path, project, fps=fps)
 
     if progress_cb is not None:
@@ -46,7 +44,7 @@ def run_ffmpeg_step(
                 message="Extraction terminée.",
                 frame_index=0,
                 total_frames=None,
-                frame_path=Path(out_dir) if out_dir is not None else None,
+                frame_path=Path(out_dir),
             )
         )
 

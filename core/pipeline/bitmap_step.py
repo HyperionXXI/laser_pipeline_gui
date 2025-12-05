@@ -1,3 +1,5 @@
+# core/pipeline/bitmap_step.py
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -18,30 +20,55 @@ def run_bitmap_step(
     """
     Step pipeline pour la conversion PNG → BMP (ImageMagick).
 
-    On délègue à convert_project_frames_to_bmp() qui gère déjà la boucle
-    de traitement des frames. Pour l'instant, on ne dispose pas d'un hook
-    interne par frame, donc on simule la progression (0% → 100%).
+    - PNG attendus dans  projects/<project>/frames
+    - BMP écrits dans    projects/<project>/bmp
+    - Retourne un StepResult avec output_dir = dossier BMP.
+
+    La progression frame par frame est remontée via progress_cb(FrameProgress).
     """
+
     step_name = "bitmap"
 
+    # --- Message de démarrage ---
     if progress_cb is not None:
         progress_cb(
             FrameProgress(
                 step_name=step_name,
-                message="Démarrage Bitmap (ImageMagick)…",
+                message=(
+                    f"Démarrage Bitmap (ImageMagick)… "
+                    f"(threshold={threshold}%, thinning={use_thinning}, "
+                    f"max_frames={max_frames or 'toutes'})"
+                ),
                 frame_index=0,
                 total_frames=None,
                 frame_path=None,
             )
         )
 
+    # Callback appelée par convert_project_frames_to_bmp après chaque frame
+    def on_frame_done(idx: int, total: int, bmp_path: Path) -> None:
+        if progress_cb is None:
+            return
+        progress_cb(
+            FrameProgress(
+                step_name=step_name,
+                message=f"Frame {idx}/{total} convertie",
+                frame_index=idx,
+                total_frames=total,
+                frame_path=bmp_path,
+            )
+        )
+
+    # Appel du code métier : c'est convert_project_frames_to_bmp qui boucle
     out_dir = convert_project_frames_to_bmp(
-        project,
+        project_name=project,
         threshold=threshold,
         use_thinning=use_thinning,
         max_frames=max_frames,
+        frame_callback=on_frame_done,  # <-- important pour la preview progressive
     )
 
+    # --- Message de fin ---
     if progress_cb is not None:
         progress_cb(
             FrameProgress(
@@ -49,7 +76,7 @@ def run_bitmap_step(
                 message="Conversion BMP terminée.",
                 frame_index=0,
                 total_frames=None,
-                frame_path=Path(out_dir) if out_dir is not None else None,
+                frame_path=None,
             )
         )
 

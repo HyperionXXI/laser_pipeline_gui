@@ -1,104 +1,85 @@
 # core/step_bitmap.py
 
-import subprocess
+from __future__ import annotations
+
 from pathlib import Path
+import subprocess
+from typing import Optional, Callable
 
-from .config import MAGICK_PATH, PROJECTS_ROOT
+from .config import PROJECTS_ROOT
 
 
-def png_frames_to_bmp_folder(
-    input_dir: str,
-    output_dir: str,
-    threshold: int = 60,
-    use_thinning: bool = False,
-    max_frames: int | None = None,
-) -> Path:
+def convert_png_to_bmp(
+    png_path: Path,
+    bmp_path: Path,
+    threshold: int,
+    thinning: bool,
+) -> None:
     """
-    Convertit des PNG en BMP via ImageMagick, avec pré-traitement pour Potrace.
+    Convertit un PNG en BMP noir/blanc via ImageMagick.
 
-    Traitements appliqués :
-        - conversion en niveaux de gris
-        - seuillage (binarisation) à 'threshold' %
-        - optionnel : thinning (squelette) pour affiner les traits
-
-    Args:
-        input_dir: dossier contenant des .png (frames)
-        output_dir: dossier où écrire les .bmp
-        threshold: pourcentage de seuil (0-100, typiquement 40–70)
-        use_thinning: si True, applique un thinning pour réduire l'épaisseur des traits
-        max_frames: si non-None, limite le nombre de frames traitées (pour tests)
-
-    Returns:
-        Path vers le dossier de sortie (output_dir).
+    - threshold : 0..100 (%)
+    - thinning : True/False pour l'option -morphology Thinning
     """
-    in_path = Path(input_dir)
-    out_path = Path(output_dir)
+    bmp_path.parent.mkdir(parents=True, exist_ok=True)
 
-    if not in_path.is_dir():
-        raise ValueError(f"Dossier d'entrée inexistant: {in_path}")
+    # Commande de base : gris -> seuil -> BMP
+    cmd = [
+        "magick",
+        str(png_path),
+        "-colorspace", "Gray",
+        "-threshold", f"{threshold}%",
+    ]
 
-    out_path.mkdir(parents=True, exist_ok=True)
+    if thinning:
+        cmd += ["-morphology", "Thinning", "Skeleton"]
 
-    png_files = sorted(in_path.glob("*.png"))
-    if not png_files:
-        raise RuntimeError(f"Aucun fichier .png trouvé dans {in_path}")
+    cmd.append(str(bmp_path))
 
-    # Clamp simple du seuil
-    threshold = max(0, min(100, threshold))
-
-    for idx, png_file in enumerate(png_files):
-        if max_frames is not None and idx >= max_frames:
-            break
-
-        bmp_name = png_file.stem + ".bmp"
-        bmp_file = out_path / bmp_name
-
-        cmd = [
-            str(MAGICK_PATH),
-            str(png_file),
-            "-colorspace", "Gray",
-            "-threshold", f"{threshold}%",
-        ]
-
-        # Optionnel : thinning / skeleton (plus léger qu'avant)
-        if use_thinning:
-            cmd += [
-                "-morphology", "Thinning:1", "Skeleton",
-            ]
-
-        cmd.append(str(bmp_file))
-
-        result = subprocess.run(cmd, capture_output=True, text=True)
-
-        if result.returncode != 0:
-            raise RuntimeError(
-                f"ImageMagick a échoué pour {png_file} "
-                f"(code {result.returncode}):\n{result.stderr}"
-            )
-
-    return out_path
+    subprocess.run(cmd, check=True)
 
 
 def convert_project_frames_to_bmp(
     project_name: str,
-    threshold: int = 60,
-    use_thinning: bool = False,
-    max_frames: int | None = None,
+    threshold: int,
+    use_thinning: bool,
+    max_frames: Optional[int] = None,
+    frame_callback: Optional[Callable[[int, int, Path], None]] = None,
 ) -> Path:
     """
-    Utilitaire: convertit les frames PNG d'un projet en BMP prétraités.
+    Parcourt projects/<project_name>/frames/frame_*.png et génère
+    projects/<project_name>/bmp/frame_*.bmp.
 
-    - Entrée:  projects/<project_name>/frames/*.png
-    - Sortie:  projects/<project_name>/bmp/*.bmp
+    - threshold      : 0..100 (%)
+    - use_thinning   : applique ou non le Thinning
+    - max_frames     : si non None, limite au N premières frames
+    - frame_callback : appelé à chaque frame générée :
+                       frame_callback(index_1_based, total_frames, bmp_path)
     """
     project_root = PROJECTS_ROOT / project_name
     frames_dir = project_root / "frames"
     bmp_dir = project_root / "bmp"
+    bmp_dir.mkdir(parents=True, exist_ok=True)
 
-    return png_frames_to_bmp_folder(
-        str(frames_dir),
-        str(bmp_dir),
-        threshold=threshold,
-        use_thinning=use_thinning,
-        max_frames=max_frames,
-    )
+    png_files = sorted(frames_dir.glob("frame_*.png"))
+    if max_frames is not None:
+        png_files = png_files[:max_frames]
+
+    total = len(png_files)
+    if total == 0:
+        raise RuntimeError(f"Aucune frame PNG trouvée dans {frames_dir}")
+
+    for idx, png_path in enumerate(png_files, start=1):
+        bmp_path = bmp_dir / (png_path.stem + ".bmp")
+
+        convert_png_to_bmp(
+            png_path=png_path,
+            bmp_path=bmp_path,
+            threshold=threshold,
+            thinning=use_thinning,
+        )
+
+        if frame_callback is not None:
+            frame_callback(idx, total, bmp_path)
+
+    return bmp_dir
