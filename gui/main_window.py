@@ -1,84 +1,47 @@
-# gui/main_window.py
+from __future__ import annotations
 
 import sys
-import os
-import re
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QObject, Signal, Slot, QThread
+from PySide6.QtCore import Qt, Slot
 from PySide6.QtWidgets import (
     QApplication,
-    QMainWindow,
-    QWidget,
-    QVBoxLayout,
+    QCheckBox,
+    QGroupBox,
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QMainWindow,
     QPushButton,
-    QTextEdit,
     QSpinBox,
-    QCheckBox,
-    QGroupBox,
+    QTextEdit,
+    QVBoxLayout,
+    QWidget,
     QSizePolicy,
     QProgressBar,
-    QComboBox,    
 )
 
-from core.ilda_preview import render_ilda_frame_to_png
-from core.step_ffmpeg import extract_frames
-from core.step_bitmap import convert_project_frames_to_bmp
+from core.config import PROJECTS_ROOT
 from core.step_potrace import bitmap_to_svg_folder
 from core.step_ilda import export_project_to_ilda
-from core.config import PROJECTS_ROOT
 from .preview_widgets import RasterPreview, SvgPreview
+from .pipeline_controller import PipelineController
 
-
-# ---------------------------------------------------------------------------
-# Worker générique pour exécuter une fonction lourde dans un QThread.
-# ---------------------------------------------------------------------------
-
-class Worker(QObject):
-    finished = Signal(object)
-    error = Signal(str)
-
-    def __init__(self, func, *args, **kwargs):
-        super().__init__()
-        self.func = func
-        self.args = args
-        self.kwargs = kwargs
-
-    @Slot()
-    def run(self):
-        try:
-            result = self.func(*self.args, **self.kwargs)
-        except Exception as e:
-            self.error.emit(str(e))
-        else:
-            self.finished.emit(result)
-
-    def cancel(self):
-        """Placeholder pour un futur mécanisme d'annulation."""
-        pass
-
-
-
-# ---------------------------------------------------------------------------
-# Fenêtre principale
-# ---------------------------------------------------------------------------
 
 class MainWindow(QMainWindow):
-    def __init__(self):
+    def __init__(self) -> None:
         super().__init__()
 
-        self.setWindowTitle("Laser Pipeline - Prototype GUI")
+        self.setWindowTitle("Laser Pipeline GUI")
 
-        central = QWidget()
+        central = QWidget(self)
+        self.setCentralWidget(central)
         main_layout = QVBoxLayout(central)
 
         # ================================================================
-        # 1) GROUPE : PARAMÈTRES GÉNÉRAUX (en haut, pleine largeur)
+        # 1) Paramètres généraux
         # ================================================================
-        group_general = QGroupBox("Paramètres généraux")
+        group_general = QGroupBox("Paramètres généraux", self)
         general_layout = QVBoxLayout(group_general)
 
         # Ligne vidéo
@@ -86,10 +49,9 @@ class MainWindow(QMainWindow):
         row_video.addWidget(QLabel("Vidéo source :"))
         self.edit_video_path = QLineEdit()
         row_video.addWidget(self.edit_video_path)
-
-        self.btn_browse = QPushButton("Parcourir…")
-        self.btn_browse.clicked.connect(self.choose_video)
-        row_video.addWidget(self.btn_browse)
+        btn_browse = QPushButton("Parcourir…")
+        btn_browse.clicked.connect(self.choose_video)
+        row_video.addWidget(btn_browse)
         general_layout.addLayout(row_video)
 
         # Ligne projet
@@ -108,317 +70,243 @@ class MainWindow(QMainWindow):
         row_fps.addWidget(self.spin_fps)
         general_layout.addLayout(row_fps)
 
-        # Bouton de test des paramètres
-        self.btn_test = QPushButton("Tester les paramètres")
-        self.btn_test.clicked.connect(self.on_test_click)
-        general_layout.addWidget(self.btn_test)
+        # Bouton test
+        btn_test = QPushButton("Tester les paramètres")
+        btn_test.clicked.connect(self.on_test_click)
+        general_layout.addWidget(btn_test)
 
         main_layout.addWidget(group_general)
 
         # ================================================================
-        # 2) GROUPE : PIPELINE VIDÉO → VECTEUR
-        #    → 4 colonnes : (1) FFmpeg, (2) Bitmap, (3) Vectorisation, (4) ILDA
+        # 2) Pipeline vidéo → vecteur
         # ================================================================
-        group_pipeline = QGroupBox("Pipeline vidéo → vecteur")
+        group_pipeline = QGroupBox("Pipeline vidéo → vecteur", self)
         pipeline_layout = QVBoxLayout(group_pipeline)
 
-        # ---- Ligne : sélection de frame + bouton Prévisualiser ----
+        # Ligne frame + bouton prévisualiser
         row_frame = QHBoxLayout()
         row_frame.addWidget(QLabel("Frame :"))
-
         self.spin_frame = QSpinBox()
-        self.spin_frame.setMinimum(1)
-        self.spin_frame.setMaximum(99999)
+        self.spin_frame.setRange(1, 99999)
         row_frame.addWidget(self.spin_frame)
 
-        # On met le bouton juste après le spin, sans gros espace au milieu
         self.btn_preview = QPushButton("Prévisualiser frame")
         self.btn_preview.clicked.connect(self.on_preview_frame)
         row_frame.addWidget(self.btn_preview)
 
         row_frame.addStretch()
-
-
         pipeline_layout.addLayout(row_frame)
-        
-        # ---- Ligne : état de la tâche (progression + annulation) ----
-        row_task = QHBoxLayout()
 
+        # Ligne état de tâche (progress bar + annulation)
+        row_task = QHBoxLayout()
         self.progress_bar = QProgressBar()
         self.progress_bar.setRange(0, 100)
         self.progress_bar.setValue(0)
-        self.progress_bar.setTextVisible(True)
         self.progress_bar.setVisible(False)
+        row_task.addWidget(self.progress_bar)
 
         self.btn_cancel_task = QPushButton("Annuler la tâche en cours")
-        self.btn_cancel_task.setEnabled(False)
         self.btn_cancel_task.clicked.connect(self.on_cancel_task)
-
-        row_task.addWidget(self.progress_bar)
+        self.btn_cancel_task.setEnabled(False)
         row_task.addWidget(self.btn_cancel_task)
 
         pipeline_layout.addLayout(row_task)
 
-
-        # ---- Ligne : 4 colonnes (paramètres + preview) ----
+        # ---- 4 colonnes ----
         cols_layout = QHBoxLayout()
 
-        # ------------------------------------------------------------
-        # Colonne 1 : FFmpeg → PNG (frames)
-        # ------------------------------------------------------------
+        # Colonne 1 : FFmpeg
         col1_layout = QVBoxLayout()
-
-        group_step1_params = QGroupBox("1. FFmpeg → PNG (frames)")
-        step1_layout = QVBoxLayout(group_step1_params)
-
+        group_step1 = QGroupBox("1. FFmpeg → PNG (frames)")
+        step1_layout = QVBoxLayout(group_step1)
         self.btn_ffmpeg = QPushButton("Lancer FFmpeg")
         self.btn_ffmpeg.clicked.connect(self.on_ffmpeg_click)
         step1_layout.addWidget(self.btn_ffmpeg)
         step1_layout.addStretch()
+        col1_layout.addWidget(group_step1)
 
-        col1_layout.addWidget(group_step1_params)
-
-        group_step1_preview = QGroupBox("Prévisualisation PNG (frames)")
-        step1_prev_layout = QVBoxLayout(group_step1_preview)
-
+        group_prev1 = QGroupBox("Prévisualisation PNG (frames)")
+        prev1_layout = QVBoxLayout(group_prev1)
         self.preview_png = RasterPreview()
         self.preview_png.setMinimumSize(240, 180)
-        step1_prev_layout.addWidget(self.preview_png)
-
-        col1_layout.addWidget(group_step1_preview)
+        prev1_layout.addWidget(self.preview_png)
+        col1_layout.addWidget(group_prev1)
 
         col1_widget = QWidget()
         col1_widget.setLayout(col1_layout)
+        col1_widget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        cols_layout.addWidget(col1_widget)
 
-        # ------------------------------------------------------------
-        # Colonne 2 : Bitmap (ImageMagick)
-        # ------------------------------------------------------------
+        # Colonne 2 : Bitmap
         col2_layout = QVBoxLayout()
+        group_step2 = QGroupBox("2. Bitmap (ImageMagick)")
+        step2_layout = QVBoxLayout(group_step2)
 
-        group_step2_params = QGroupBox("2. Bitmap (ImageMagick)")
-        step2_layout = QVBoxLayout(group_step2_params)
-
-        row_bmp_params = QHBoxLayout()
-        row_bmp_params.addWidget(QLabel("Seuil (%):"))
-
+        row_bmp = QHBoxLayout()
+        row_bmp.addWidget(QLabel("Seuil (%):"))
         self.spin_bmp_threshold = QSpinBox()
         self.spin_bmp_threshold.setRange(0, 100)
         self.spin_bmp_threshold.setValue(60)
-        row_bmp_params.addWidget(self.spin_bmp_threshold)
+        row_bmp.addWidget(self.spin_bmp_threshold)
 
         self.check_bmp_thinning = QCheckBox("Thinning")
         self.check_bmp_thinning.setChecked(False)
-        row_bmp_params.addWidget(self.check_bmp_thinning)
+        row_bmp.addWidget(self.check_bmp_thinning)
 
-        row_bmp_params.addWidget(QLabel("Max frames (0 = toutes) :"))
+        row_bmp.addWidget(QLabel("Max frames (0 = toutes) :"))
         self.spin_bmp_max_frames = QSpinBox()
         self.spin_bmp_max_frames.setRange(0, 100000)
         self.spin_bmp_max_frames.setValue(0)
-        row_bmp_params.addWidget(self.spin_bmp_max_frames)
+        row_bmp.addWidget(self.spin_bmp_max_frames)
 
-        row_bmp_params.addStretch()
-        step2_layout.addLayout(row_bmp_params)
+        row_bmp.addStretch()
+        step2_layout.addLayout(row_bmp)
 
         self.btn_bmp = QPushButton("Lancer Bitmap")
         self.btn_bmp.clicked.connect(self.on_bmp_click)
         step2_layout.addWidget(self.btn_bmp)
         step2_layout.addStretch()
+        col2_layout.addWidget(group_step2)
 
-        col2_layout.addWidget(group_step2_params)
-
-        group_step2_preview = QGroupBox("Prévisualisation BMP (bitmap)")
-        step2_prev_layout = QVBoxLayout(group_step2_preview)
-
+        group_prev2 = QGroupBox("Prévisualisation BMP (bitmap)")
+        prev2_layout = QVBoxLayout(group_prev2)
         self.preview_bmp = RasterPreview()
         self.preview_bmp.setMinimumSize(240, 180)
-        step2_prev_layout.addWidget(self.preview_bmp)
-
-        col2_layout.addWidget(group_step2_preview)
+        prev2_layout.addWidget(self.preview_bmp)
+        col2_layout.addWidget(group_prev2)
 
         col2_widget = QWidget()
         col2_widget.setLayout(col2_layout)
+        col2_widget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        cols_layout.addWidget(col2_widget)
 
-        # ------------------------------------------------------------
-        # Colonne 3 : Vectorisation (Potrace / SVG)
-        # ------------------------------------------------------------
+        # Colonne 3 : Potrace / SVG
         col3_layout = QVBoxLayout()
-
-        group_step3_params = QGroupBox("3. Vectorisation (Potrace)")
-        step3_layout = QVBoxLayout(group_step3_params)
-
+        group_step3 = QGroupBox("3. Vectorisation (Potrace)")
+        step3_layout = QVBoxLayout(group_step3)
         self.btn_potrace = QPushButton("Lancer Potrace")
         self.btn_potrace.clicked.connect(self.on_potrace_click)
         step3_layout.addWidget(self.btn_potrace)
         step3_layout.addStretch()
+        col3_layout.addWidget(group_step3)
 
-        col3_layout.addWidget(group_step3_params)
-
-        group_step3_preview = QGroupBox("Prévisualisation SVG (vectorisé)")
-        step3_prev_layout = QVBoxLayout(group_step3_preview)
-
+        group_prev3 = QGroupBox("Prévisualisation SVG (vectorisé)")
+        prev3_layout = QVBoxLayout(group_prev3)
         self.preview_svg = SvgPreview()
         self.preview_svg.setMinimumSize(240, 180)
-        step3_prev_layout.addWidget(self.preview_svg)
-
-        col3_layout.addWidget(group_step3_preview)
+        prev3_layout.addWidget(self.preview_svg)
+        col3_layout.addWidget(group_prev3)
 
         col3_widget = QWidget()
         col3_widget.setLayout(col3_layout)
+        col3_widget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        cols_layout.addWidget(col3_widget)
 
-        # ------------------------------------------------------------
-        # Colonne 4 : ILDA (export)
-        # ------------------------------------------------------------
+        # Colonne 4 : ILDA
         col4_layout = QVBoxLayout()
-
-
-        group_step4_params = QGroupBox("4. ILDA (export)")
-        step4_layout = QVBoxLayout(group_step4_params)
-
-        # Ligne 1 : ajustement (fit axis)
-        row_ilda_fit = QHBoxLayout()
-        row_ilda_fit.addWidget(QLabel("Ajustement :"))
-        self.combo_ilda_fit_axis = QComboBox()
-        self.combo_ilda_fit_axis.addItems([
-            "Max des deux axes",
-            "Ajuster sur largeur (X)",
-            "Ajuster sur hauteur (Y)",
-        ])
-        row_ilda_fit.addWidget(self.combo_ilda_fit_axis)
-        step4_layout.addLayout(row_ilda_fit)
-
-        # Ligne 2 : fill ratio
-        row_ilda_fill = QHBoxLayout()
-        row_ilda_fill.addWidget(QLabel("Fill (%) :"))
-        self.spin_ilda_fill = QSpinBox()
-        self.spin_ilda_fill.setRange(10, 100)
-        self.spin_ilda_fill.setValue(95)
-        row_ilda_fill.addWidget(self.spin_ilda_fill)
-        step4_layout.addLayout(row_ilda_fill)
-
-        # Ligne 3 : min size (anti-poussière)
-        row_ilda_min = QHBoxLayout()
-        row_ilda_min.addWidget(QLabel("Min taille (%) :"))
-        self.spin_ilda_min_size = QSpinBox()
-        self.spin_ilda_min_size.setRange(0, 50)
-        self.spin_ilda_min_size.setValue(1)   # 1% par défaut
-        row_ilda_min.addWidget(self.spin_ilda_min_size)
-        step4_layout.addLayout(row_ilda_min)
-
-        # Bouton Export
+        group_step4 = QGroupBox("4. ILDA (export)")
+        step4_layout = QVBoxLayout(group_step4)
         self.btn_ilda = QPushButton("Exporter ILDA")
         self.btn_ilda.clicked.connect(self.on_export_ilda_click)
         step4_layout.addWidget(self.btn_ilda)
         step4_layout.addStretch()
+        col4_layout.addWidget(group_step4)
 
-        col4_layout.addWidget(group_step4_params)
-
-        group_step4_preview = QGroupBox("Prévisualisation ILDA")
-        step4_prev_layout = QVBoxLayout(group_step4_preview)
-
+        group_prev4 = QGroupBox("Prévisualisation ILDA (raster approx.)")
+        prev4_layout = QVBoxLayout(group_prev4)
         self.preview_ilda = RasterPreview()
         self.preview_ilda.setMinimumSize(240, 180)
-        step4_prev_layout.addWidget(self.preview_ilda)
-
-        col4_layout.addWidget(group_step4_preview)
+        prev4_layout.addWidget(self.preview_ilda)
+        col4_layout.addWidget(group_prev4)
 
         col4_widget = QWidget()
         col4_widget.setLayout(col4_layout)
-
-        # ICI il manque la création de col4_widget
-
-        # ---- Ajout des 4 colonnes dans le layout horizontal ----
-        for w in (col1_widget, col2_widget, col3_widget, col4_widget):
-            w.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
-            cols_layout.addWidget(w, 1)  # stretch = 1 pour chacun
+        col4_widget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        cols_layout.addWidget(col4_widget)
 
         pipeline_layout.addLayout(cols_layout)
-
-
         main_layout.addWidget(group_pipeline)
 
         # ================================================================
-        # 3) ZONE DE LOG (en bas, pleine largeur)
+        # 3) Log
         # ================================================================
         self.log_view = QTextEdit()
         self.log_view.setReadOnly(True)
         main_layout.addWidget(self.log_view)
 
-        self.setCentralWidget(central)
-
-        # Gestion du worker courant
-        self._current_thread: QThread | None = None
-        self._current_worker: Worker | None = None
+        # ------------------------------------------------------------
+        # PipelineController
+        # ------------------------------------------------------------
+        self.pipeline = PipelineController(parent=self, log_fn=self.log)
+        self.pipeline.step_started.connect(self.on_step_started)
+        self.pipeline.step_finished.connect(self.on_step_finished)
+        self.pipeline.step_error.connect(self.on_step_error)
+        self.pipeline.step_progress.connect(self.on_step_progress)
 
     # ------------------------------------------------------------------
-    # Utilitaires UI / threads
+    # Utilitaires
     # ------------------------------------------------------------------
 
-    def set_busy(self, busy: bool):
+    def log(self, text: str) -> None:
+        self.log_view.append(text)
 
+    def set_busy(self, busy: bool) -> None:
         if busy:
-            QApplication.setOverrideCursor(Qt.WaitCursor)
             self.progress_bar.setVisible(True)
-            self.progress_bar.setRange(0, 0)   # mode indéterminé
+            self.progress_bar.setRange(0, 0)  # indéterminé
             self.btn_cancel_task.setEnabled(True)
         else:
-            QApplication.restoreOverrideCursor()
             self.progress_bar.setRange(0, 100)
             self.progress_bar.setValue(0)
             self.progress_bar.setVisible(False)
             self.btn_cancel_task.setEnabled(False)
 
-        QApplication.processEvents()
+    # ------------------------------------------------------------------
+    # Slots liés au PipelineController
+    # ------------------------------------------------------------------
 
-
-    def start_worker(self, func, finished_cb, step_label, *args, **kwargs):
+    @Slot(str)
+    def on_step_started(self, step_name: str) -> None:
         self.set_busy(True)
 
-        thread = QThread(self)
-        worker = Worker(func, *args, **kwargs)
-        worker.moveToThread(thread)
+    @Slot(str, object)
+    def on_step_finished(self, step_name: str, result) -> None:
+        self.set_busy(False)
+        msg = getattr(result, "message", "")
+        self.log(f"[{step_name}] {msg}")
 
-        def cleanup():
-            self.set_busy(False)
-            thread.quit()
-            worker.deleteLater()
-            thread.deleteLater()
-            self._current_thread = None
-            self._current_worker = None
-
-        def on_finished(result):
+        out_dir = getattr(result, "output_dir", None)
+        if out_dir:
+            # On met à jour la prévisualisation correspondante avec la dernière frame
             try:
-                finished_cb(result)
-            finally:
-                cleanup()
+                last = self._find_last_frame(Path(out_dir))
+            except Exception:
+                last = None
 
-        def on_error(message: str):
-            self.log(f"[{step_label}] ERREUR : {message}")
-            cleanup()
+            if last:
+                if step_name == "ffmpeg":
+                    self.preview_png.show_image(str(last))
+                elif step_name == "bitmap":
+                    self.preview_bmp.show_image(str(last))
 
-        worker.finished.connect(on_finished)
-        worker.error.connect(on_error)
-        thread.started.connect(worker.run)
+    @Slot(str, str)
+    def on_step_error(self, step_name: str, message: str) -> None:
+        self.set_busy(False)
+        self.log(f"[{step_name}] ERREUR : {message}")
 
-        self._current_thread = thread
-        self._current_worker = worker
-        thread.start()
-
-
-    def on_worker_progress(self, value: int):
-        self.progress_bar.setValue(value)
-
-
+    @Slot(str, object)
+    def on_step_progress(self, step_name: str, fp) -> None:
+        # Pour l'instant, on se contente de logger le message éventuel.
+        msg = getattr(fp, "message", "")
+        if msg:
+            self.log(f"[{step_name}] {msg}")
+        # On pourra brancher ici une vraie progression si total_frames est renseigné.
 
     # ------------------------------------------------------------------
-    # Callbacks & logique métier
+    # Callbacks UI
     # ------------------------------------------------------------------
 
-    def log(self, text: str):
-        """Ajoute une ligne dans la zone de log."""
-        self.log_view.append(text)
-
-    def choose_video(self):
-        """Ouvre une boîte de dialogue pour choisir un fichier vidéo."""
+    def choose_video(self) -> None:
         from PySide6.QtWidgets import QFileDialog
 
         path, _ = QFileDialog.getOpenFileName(
@@ -431,31 +319,7 @@ class MainWindow(QMainWindow):
             self.edit_video_path.setText(path)
             self.log(f"Vidéo sélectionnée : {path}")
 
-    def closeEvent(self, event):
-        """
-        On demande poliment l’arrêt du thread courant s’il existe,
-        sans jamais bloquer avec wait().
-        """
-        thread = getattr(self, "_current_thread", None)
-        worker = getattr(self, "_current_worker", None)
-
-        try:
-            if thread is not None and thread.isRunning():
-                self.log("Fermeture : arrêt du traitement en cours…")
-
-                if worker is not None and hasattr(worker, "cancel"):
-                    worker.cancel()
-
-                thread.quit()
-        except RuntimeError:
-            # QThread déjà détruit côté C++ -> on ignore
-            pass
-
-        event.accept()
-
-
-    def on_test_click(self):
-        """Vérifie les paramètres entrés et les affiche dans le log."""
+    def on_test_click(self) -> None:
         video = (self.edit_video_path.text() or "").strip()
         project = (self.edit_project.text() or "").strip()
         fps = self.spin_fps.value()
@@ -473,18 +337,13 @@ class MainWindow(QMainWindow):
         self.log(f"FPS : {fps}")
         self.log("==========================")
 
-
-    def on_ffmpeg_click(self):
-        """Lance l'extraction des frames via FFmpeg."""
+    def on_ffmpeg_click(self) -> None:
         video = (self.edit_video_path.text() or "").strip()
         project = (self.edit_project.text() or "").strip()
         fps = self.spin_fps.value()
-        project_root = PROJECTS_ROOT / project
-
-        self.log("[FFmpeg] Démarrage extraction frames...")
 
         if not video:
-            self.log("Erreur FFmpeg : aucun fichier vidéo sélectionné.")
+            self.log("Erreur FFmpeg : aucun fichier vidéo sélectionnée.")
             return
         if not project:
             self.log("Erreur FFmpeg : nom de projet vide.")
@@ -495,31 +354,13 @@ class MainWindow(QMainWindow):
         self.log(f"  Projet : {project}")
         self.log(f"  FPS    : {fps}")
 
-        def on_finished(out_dir):
-            self.log(f"[FFmpeg] Terminé. Frames dans : {out_dir}")
-            # on force la prévisualisation sur la DERNIÈRE frame PNG existante
-            last_idx = self._find_last_frame_index(project_root / "frames", "png")
-            if last_idx is not None:
-                self.spin_frame.setValue(last_idx)
-            self.update_previews_for_current_frame()
+        self.pipeline.start_ffmpeg(video, project, fps)
 
-        self.start_worker(
-            extract_frames,
-            on_finished,
-            "FFmpeg",
-            video,
-            project,
-            fps=fps,
-        )
-
-
-    def on_bmp_click(self):
-        """Convertit les frames PNG du projet en BMP via ImageMagick."""
+    def on_bmp_click(self) -> None:
         project = (self.edit_project.text() or "").strip()
         if not project:
             self.log("Erreur BMP : nom de projet vide.")
             return
-        project_root = PROJECTS_ROOT / project
 
         threshold = self.spin_bmp_threshold.value()
         use_thinning = self.check_bmp_thinning.isChecked()
@@ -532,26 +373,14 @@ class MainWindow(QMainWindow):
             f"max_frames={max_frames or 'toutes'})..."
         )
 
-        def on_finished(bmp_dir):
-            self.log(f"[BMP] Terminé. BMP dans : {bmp_dir}")
-            last_idx = self._find_last_frame_index(project_root / "bmp", "bmp")
-            if last_idx is not None:
-                self.spin_frame.setValue(last_idx)
-            self.update_previews_for_current_frame()
-
-        self.start_worker(
-            convert_project_frames_to_bmp,
-            on_finished,
-            "BMP",
+        self.pipeline.start_bitmap(
             project,
             threshold=threshold,
             use_thinning=use_thinning,
             max_frames=max_frames,
         )
 
-
-    def on_potrace_click(self):
-        """Vectorise les BMP du projet en SVG via Potrace."""
+    def on_potrace_click(self) -> None:
         project = (self.edit_project.text() or "").strip()
         if not project:
             self.log("Erreur Potrace : nom de projet vide.")
@@ -565,47 +394,36 @@ class MainWindow(QMainWindow):
         self.log(f"  Entrée : {bmp_dir}")
         self.log(f"  Sortie : {svg_dir}")
 
-        def on_finished(svg_out):
-            self.log(f"[Potrace] Terminé. SVG dans : {svg_out}")
-            last_idx = self._find_last_frame_index(svg_dir, "svg")
-            if last_idx is not None:
-                self.spin_frame.setValue(last_idx)
-            self.update_previews_for_current_frame()
+        # appel synchrone (rapide), pas de pipeline pour l'instant
+        svg_out = bitmap_to_svg_folder(str(bmp_dir), str(svg_dir))
+        self.log(f"[Potrace] Terminé. SVG dans : {svg_out}")
 
-        self.start_worker(
-            bitmap_to_svg_folder,
-            on_finished,
-            "Potrace",
-            str(bmp_dir),
-            str(svg_dir),
-        )
+        # Mise à jour prévisualisation : on prend la dernière frame SVG
+        last_svg = self._find_last_frame(svg_dir, pattern="frame_*.svg")
+        if last_svg:
+            self.preview_svg.show_svg(str(last_svg))
 
-    def _find_last_frame_index(self, dir_path: Path, suffix: str) -> int | None:
-        """
-        Cherche la plus grande valeur de N telle qu'un fichier
-        frame_NNNN.<suffix> existe dans dir_path.
-        Retourne None si rien n'est trouvé.
-        """
-        if not dir_path.exists():
-            return None
+    def on_export_ilda_click(self) -> None:
+        project = (self.edit_project.text() or "").strip()
+        if not project:
+            self.log("Erreur ILDA : nom de projet vide.")
+            return
 
-        pattern = re.compile(r"^frame_(\d+)\." + re.escape(suffix) + r"$")
-        max_idx = 0
+        self.log(f"[ILDA] Export ILDA pour le projet '{project}'...")
 
-        for entry in dir_path.iterdir():
-            if not entry.is_file():
-                continue
-            m = pattern.match(entry.name)
-            if not m:
-                continue
-            idx = int(m.group(1))
-            if idx > max_idx:
-                max_idx = idx
+        # Export synchrone (pour l'instant)
+        out_path = export_project_to_ilda(project)
+        self.log(f"[ILDA] Terminé. Fichier : {out_path}")
 
-        return max_idx or None
+        # Prévisualisation approximative : on affiche la première PNG du projet
+        project_root = PROJECTS_ROOT / project
+        png_dir = project_root / "frames"
+        first_png = self._find_first_frame(png_dir)
+        if first_png:
+            self.preview_ilda.show_image(str(first_png))
+            self.log(f"[Preview] ILDA approx à partir de : {first_png}")
 
-    def update_previews_for_current_frame(self):
-        """Affiche la frame sélectionnée en PNG, BMP, SVG (et placeholder ILDA)."""
+    def on_preview_frame(self) -> None:
         project = (self.edit_project.text() or "").strip()
         if not project:
             self.log("Erreur prévisualisation : nom de projet vide.")
@@ -616,100 +434,41 @@ class MainWindow(QMainWindow):
         png_dir = project_root / "frames"
         bmp_dir = project_root / "bmp"
         svg_dir = project_root / "svg"
-        ilda_dir = project_root / "ilda"
 
         png_path = png_dir / f"frame_{frame_index:04d}.png"
         bmp_path = bmp_dir / f"frame_{frame_index:04d}.bmp"
         svg_path = svg_dir / f"frame_{frame_index:04d}.svg"
 
-        # PNG
         self.log(f"[Preview] Frame {frame_index} (PNG) → {png_path}")
         self.preview_png.show_image(str(png_path))
 
-        # BMP
         self.log(f"[Preview] Frame {frame_index} (BMP) → {bmp_path}")
         self.preview_bmp.show_image(str(bmp_path))
 
-        # SVG
         self.log(f"[Preview] Frame {frame_index} (SVG) → {svg_path}")
         self.preview_svg.show_svg(str(svg_path))
 
-        # ILDA : pour l’instant on réutilise l’image PNG comme approximation
-        self.log(f"[Preview] Frame {frame_index} (ILDA approx) → {png_path}")
-        self.preview_ilda.show_image(str(png_path))
+    def on_cancel_task(self) -> None:
+        self.pipeline.cancel_current_step()
+
+    # ------------------------------------------------------------------
+    # Helpers pour trouver la "dernière" ou "première" frame d'un dossier
+    # ------------------------------------------------------------------
+
+    def _find_last_frame(self, directory: Path, pattern: str = "frame_*.png") -> Path | None:
+        if not directory.exists():
+            return None
+        files = sorted(directory.glob(pattern))
+        return files[-1] if files else None
+
+    def _find_first_frame(self, directory: Path, pattern: str = "frame_*.png") -> Path | None:
+        if not directory.exists():
+            return None
+        files = sorted(directory.glob(pattern))
+        return files[0] if files else None
 
 
-    def on_preview_frame(self):
-        """Slot du bouton 'Prévisualiser frame'."""
-        self.update_previews_for_current_frame()
-
-
-
-    def on_export_ilda_click(self):
-        """Export ILDA à partir des SVG du projet."""
-        project = (self.edit_project.text() or "").strip()
-        if not project:
-            self.log("Erreur ILDA : nom de projet vide.")
-            return
-        
-        project_root = PROJECTS_ROOT / project   # <<< AJOUT
-
-        # Récupère les paramètres GUI
-        fit_text = self.combo_ilda_fit_axis.currentText()
-        if "largeur" in fit_text:
-            fit_axis = "x"
-        elif "hauteur" in fit_text:
-            fit_axis = "y"
-        else:
-            fit_axis = "max"
-
-        fill_ratio = self.spin_ilda_fill.value() / 100.0
-        min_rel_size = self.spin_ilda_min_size.value() / 100.0
-
-        self.log(
-            f"[ILDA] Export ILDA pour le projet '{project}' "
-            f"(fit_axis={fit_axis}, fill={fill_ratio:.2f}, "
-            f"min_size={min_rel_size:.3f})..."
-        )
-
-        def on_finished(out_path):
-            # on garde la même frame que la dernière SVG,
-            # ce sera aussi la dernière frame ILDA
-            last_idx = self._find_last_frame_index(project_root / "svg", "svg")
-            if last_idx is not None:
-                self.spin_frame.setValue(last_idx)
-            self.log(f"[ILDA] Terminé. Fichier : {out_path}")
-            # met à jour toutes les prévisualisations sur la frame courante
-            self.update_previews_for_current_frame()
-
-        # Worker : on passe les paramètres supplémentaires
-        self.start_worker(
-            export_project_to_ilda,
-            on_finished,
-            "ILDA",
-            project,
-            fit_axis=fit_axis,
-            fill_ratio=fill_ratio,
-            min_rel_size=min_rel_size,
-        )
-
-    def on_cancel_task(self):
-        """Demande l'annulation du traitement en cours (si supportée)."""
-        thread = self._current_thread
-        worker = self._current_worker
-
-        if thread is None or not thread.isRunning():
-            self.log("[Task] Aucun traitement en cours à annuler.")
-            return
-
-        if worker is not None and hasattr(worker, "cancel"):
-            self.log("[Task] Annulation demandée…")
-            worker.cancel()
-
-        # On demande l’arrêt (le nettoyage sera fait dans on_thread_finished)
-        thread.quit()
-
-def run():
+def run() -> None:
     app = QApplication(sys.argv)
     win = MainWindow()
     win.resize(1200, 700)

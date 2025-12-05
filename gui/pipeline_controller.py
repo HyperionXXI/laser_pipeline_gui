@@ -1,172 +1,171 @@
-# gui/pipeline_controller.py
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable
+from typing import Callable, Optional
 
 from PySide6.QtCore import QObject, QThread, Signal, Slot
 
-from core.pipeline.base import FrameProgress, StepResult
+from core.pipeline.ffmpeg_step import run_ffmpeg_step
 from core.pipeline.bitmap_step import run_bitmap_step
+from core.pipeline.base import FrameProgress, StepResult
 
-class StepWorker(QObject):
+
+# Type alias: fonction de log appelée par le contrôleur
+LogFn = Callable[[str], None]
+
+
+class _StepWorker(QObject):
     """
-    Worker générique qui exécute une fonction d'étape dans un QThread.
+    Worker générique utilisé en interne par PipelineController.
 
-    La fonction est appelée avec les callbacks :
-        - on_progress(FrameProgress)
-        - check_cancel() -> bool
-    si elle accepte ces arguments. Sinon on retombe sur un appel simple.
+    Il appelle une fonction de step (run_ffmpeg_step, run_bitmap_step, ...)
+    en lui passant des callbacks de progression / annulation.
     """
     finished = Signal(object)   # StepResult
     error = Signal(str)
     progress = Signal(object)   # FrameProgress
 
-    def __init__(self, step_func: Callable[..., Any], *args, **kwargs):
+    def __init__(self, step_func: Callable[..., StepResult], *args, **kwargs) -> None:
         super().__init__()
         self._step_func = step_func
         self._args = args
         self._kwargs = kwargs
-        self._cancelled = False
-
-    def cancel(self):
-        self._cancelled = True
-
-    def _check_cancel(self) -> bool:
-        return self._cancelled
-
-    def _on_progress(self, evt: FrameProgress) -> None:
-        self.progress.emit(evt)
+        self._cancel_requested = False
 
     @Slot()
-    def run(self):
+    def run(self) -> None:
         try:
-            # Tentative avec callbacks génériques
-            try:
-                result = self._step_func(
-                    *self._args,
-                    on_progress=self._on_progress,
-                    check_cancel=self._check_cancel,
-                    **self._kwargs,
-                )
-            except TypeError:
-                # La fonction ne veut pas (encore) des callbacks -> appel simple
-                result = self._step_func(*self._args, **self._kwargs)
+            def cancel_cb() -> bool:
+                return self._cancel_requested
 
-        except Exception as e:
+            def progress_cb(fp: FrameProgress) -> None:
+                self.progress.emit(fp)
+
+            result = self._step_func(
+                *self._args,
+                progress_cb=progress_cb,
+                cancel_cb=cancel_cb,
+                **self._kwargs,
+            )
+        except Exception as e:  # garde-fou
             self.error.emit(str(e))
         else:
             self.finished.emit(result)
 
+    def cancel(self) -> None:
+        self._cancel_requested = True
+
 
 class PipelineController(QObject):
     """
-    Contrôleur centralisé du pipeline.
-    Gère un seul step à la fois (simplicité) :
-      - création / destruction du QThread
-      - signaux haut-niveau vers le GUI
+    Contrôleur de pipeline : encapsule la logique des 4 étapes
+    (FFmpeg, Bitmap, Potrace, ILDA) et gère un seul step à la fois.
+
+    La GUI n'a pas à manipuler les threads directement : elle appelle
+    start_ffmpeg(...) / start_bitmap(...), et se connecte aux signaux.
     """
 
-    step_started = Signal(str)          # nom de l'étape
-    step_progress = Signal(object)      # FrameProgress
-    step_finished = Signal(object)      # StepResult
-    step_error = Signal(str)
+    # signaux exposés à la GUI
+    step_started = Signal(str)               # ex: "ffmpeg", "bitmap"
+    step_finished = Signal(str, object)      # step_name, StepResult
+    step_error = Signal(str, str)            # step_name, message
+    step_progress = Signal(str, object)      # step_name, FrameProgress
 
-    def __init__(self, parent: QObject | None = None):
+    def __init__(self, parent: Optional[QObject] = None,
+                 log_fn: Optional[LogFn] = None) -> None:
         super().__init__(parent)
-        self._thread: QThread | None = None
-        self._worker: StepWorker | None = None
-        self._current_step: str | None = None
+        self._log = log_fn or (lambda msg: None)
 
-    # ---------- gestion interne ----------
+        self._thread: Optional[QThread] = None
+        self._worker: Optional[_StepWorker] = None
+        self._current_step: Optional[str] = None
 
-    def _cleanup(self):
-        thread = self._thread
-        worker = self._worker
-        self._thread = None
-        self._worker = None
-        self._current_step = None
+    # ------------------------------------------------------------------
+    # Gestion générique d'un step
+    # ------------------------------------------------------------------
 
-        if thread is not None:
-            thread.quit()
-            thread.wait()
-            thread.deleteLater()
-        if worker is not None:
-            worker.deleteLater()
-
-    def _start_step(self, step_name: str, func: Callable[..., Any], *args, **kwargs):
+    def _start_step(self, step_name: str,
+                    step_func: Callable[..., StepResult],
+                    *args, **kwargs) -> None:
         """
-        Lance une étape dans un worker dédié.
-        Pour l'instant, on refuse de lancer une étape si une autre tourne encore.
+        Démarre un step dans un QThread.
+
+        - step_name : étiquette pour les signaux/logs ("ffmpeg", "bitmap", ...)
+        - step_func : fonction comme run_ffmpeg_step(...)
+        - *args / **kwargs : paramètres passés au step_func
         """
+        # Si un step est déjà en cours, on refuse d'en lancer un autre
         if self._thread is not None:
-            # On pourrait lever une exception ou émettre une erreur,
-            # pour l'instant on ignore simplement.
-            self.step_error.emit(
-                f"Impossible de lancer l'étape '{step_name}' : une autre étape est déjà en cours."
-            )
+            self._log(f"[Pipeline] Un step est déjà en cours ({self._current_step}).")
             return
 
+        self._log(f"[Pipeline] Démarrage step '{step_name}'...")
         self._current_step = step_name
-        self.step_started.emit(step_name)
 
         thread = QThread(self)
-        worker = StepWorker(func, *args, **kwargs)
+        worker = _StepWorker(step_func, *args, **kwargs)
         worker.moveToThread(thread)
 
-        def on_finished(result: StepResult):
-            self.step_finished.emit(result)
-            self._cleanup()
+        def cleanup() -> None:
+            thread.quit()
+            thread.wait()
+            worker.deleteLater()
+            thread.deleteLater()
+            self._thread = None
+            self._worker = None
+            self._current_step = None
 
-        def on_error(message: str):
-            self.step_error.emit(message)
-            self._cleanup()
+        def on_finished(result: StepResult) -> None:
+            self._log(f"[Pipeline] Step '{step_name}' terminé.")
+            self.step_finished.emit(step_name, result)
+            cleanup()
+
+        def on_error(message: str) -> None:
+            self._log(f"[Pipeline] ERREUR dans step '{step_name}' : {message}")
+            self.step_error.emit(step_name, message)
+            cleanup()
+
+        def on_progress(fp: FrameProgress) -> None:
+            self.step_progress.emit(step_name, fp)
 
         worker.finished.connect(on_finished)
         worker.error.connect(on_error)
-        worker.progress.connect(self.step_progress)
+        worker.progress.connect(on_progress)
         thread.started.connect(worker.run)
 
         self._thread = thread
         self._worker = worker
+
+        self.step_started.emit(step_name)
         thread.start()
 
-    # ---------- API publique pour le GUI ----------
-
-    def start_ffmpeg(self, video_path: Path, project_name: str, fps: int):
+    def cancel_current_step(self) -> None:
         """
-        Lance l'étape FFmpeg. Les paramètres spécifiques lui sont passés ici,
-        les callbacks génériques sont gérés par StepWorker.
+        Demande l'annulation du step courant (si possible).
         """
-        from core.pipeline.ffmpeg_step import run_ffmpeg_step
-        self._start_step("ffmpeg", run_ffmpeg_step, video_path, project_name, fps)
-
-    def cancel_current(self):
-        """Demande l'annulation de l'étape actuelle (si supportée)."""
         if self._worker is not None:
+            self._log("[Pipeline] Annulation demandée.")
             self._worker.cancel()
 
-    # --- Étape BITMAP -------------------------------------------------
+    # ------------------------------------------------------------------
+    # API spécifique aux 2 étapes déjà intégrées
+    # ------------------------------------------------------------------
 
-    def start_bitmap(
-        self,
-        project_name: str,
-        threshold: int,
-        use_thinning: bool,
-        max_frames: int | None,
-    ) -> None:
-        """
-        Lance l'étape Bitmap dans un Worker (PNG -> BMP).
-        """
-        def job(on_progress, check_cancel):
-            return run_bitmap_step(
-                project_name=project_name,
-                threshold=threshold,
-                use_thinning=use_thinning,
-                max_frames=max_frames,
-                on_progress=on_progress,
-                check_cancel=check_cancel,
-            )
+    def start_ffmpeg(self, video_path: str, project: str, fps: int) -> None:
+        self._start_step("ffmpeg", run_ffmpeg_step, video_path, project, fps=fps)
 
-        self._start_step_generic("bitmap", job)
+    def start_bitmap(self, project: str,
+                     threshold: int,
+                     use_thinning: bool,
+                     max_frames: int | None) -> None:
+        self._start_step(
+            "bitmap",
+            run_bitmap_step,
+            project,
+            threshold=threshold,
+            use_thinning=use_thinning,
+            max_frames=max_frames,
+        )
 
+    # Les étapes Potrace et ILDA pourront être ajoutées dans le même style plus tard.

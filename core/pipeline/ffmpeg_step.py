@@ -1,48 +1,57 @@
-# core/pipeline/ffmpeg_step.py
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Optional
 
 from core.step_ffmpeg import extract_frames
 from .base import FrameProgress, StepResult, ProgressCallback, CancelCallback
 
 
 def run_ffmpeg_step(
-    video_path: Path,
-    project_name: str,
+    video_path: str,
+    project: str,
     fps: int,
-    on_progress: ProgressCallback | None = None,
-    check_cancel: CancelCallback | None = None,
+    progress_cb: Optional[ProgressCallback] = None,
+    cancel_cb: Optional[CancelCallback] = None,
 ) -> StepResult:
     """
-    Étape FFmpeg du pipeline, interface générique.
+    Step pipeline pour l'extraction des frames via FFmpeg.
 
-    Pour l'instant on ne sait pas estimer le nombre de frames ni la progression
-    fine, donc on émet au mieux un évènement "100%" à la fin.
+    Pour l'instant, on délègue à core.step_ffmpeg.extract_frames()
+    qui ne supporte pas le rapport de progression par frame.
+    On se contente donc d'émettre un event "0%" au début et "100%" à la fin.
     """
     step_name = "ffmpeg"
 
-    try:
-        # Appel de ta fonction existante.
-        out_dir_str = extract_frames(
-            str(video_path),
-            project_name,
-            fps=fps,
-        )
-        out_dir = Path(out_dir_str)
-
-        # Évènement de progression "final" (placeholder).
-        if on_progress is not None:
-            evt = FrameProgress(
-                step=step_name,
-                index=1,
-                total=1,
-                last_output=None,  # on ne sait pas encore quelle frame exacte
+    if progress_cb is not None:
+        progress_cb(
+            FrameProgress(
+                step_name=step_name,
+                message="Démarrage FFmpeg…",
+                frame_index=0,
+                total_frames=None,
+                frame_path=None,
             )
-            on_progress(evt)
+        )
 
-        msg = f"Frames extraites dans : {out_dir}"
-        return StepResult(step=step_name, success=True, message=msg, output_dir=out_dir)
+    # Pas de gestion fine du cancel ici : si cancel_cb() renvoie True pendant
+    # l'appel à ffmpeg, on ne peut pas vraiment interrompre proprement.
+    # Ce sera pour une évolution future (gestion de subprocess).
+    out_dir = extract_frames(video_path, project, fps=fps)
 
-    except Exception as e:
-        return StepResult(step=step_name, success=False, message=str(e))
+    if progress_cb is not None:
+        progress_cb(
+            FrameProgress(
+                step_name=step_name,
+                message="Extraction terminée.",
+                frame_index=0,
+                total_frames=None,
+                frame_path=Path(out_dir) if out_dir is not None else None,
+            )
+        )
+
+    return StepResult(
+        success=True,
+        message=f"Frames extraites dans : {out_dir}",
+        output_dir=Path(out_dir),
+    )
