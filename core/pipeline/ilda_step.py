@@ -4,6 +4,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Optional
 
+from core.config import PROJECTS_ROOT
 from core.step_ilda import export_project_to_ilda
 from .base import FrameProgress, StepResult, ProgressCallback, CancelCallback
 
@@ -23,15 +24,12 @@ def run_ilda_step(
 
     - SVG attendus dans projects/<project>/svg/frame_*.svg
     - Fichier .ild généré dans projects/<project>/ilda/<project>.ild
-
-    Paramètres:
-      - fit_axis : "max", "x", "y"
-      - fill_ratio : 0..1
-      - min_rel_size : filtre de chemins parasites (petites lignes)
-      - remove_outer_frame : supprime le cadre global (si détecté)
-      - frame_margin_rel : tolérance relative pour détecter ce cadre
     """
     step_name = "ilda"
+
+    project_root = PROJECTS_ROOT / project
+    svg_dir = project_root / "svg"
+    svg_files = sorted(svg_dir.glob("frame_*.svg"))
 
     if progress_cb is not None:
         progress_cb(
@@ -40,7 +38,7 @@ def run_ilda_step(
                 message="Démarrage export ILDA…",
                 frame_index=0,
                 total_frames=100,
-                frame_path=None,
+                frame_path=svg_files[0] if svg_files else None,
             )
         )
 
@@ -50,14 +48,20 @@ def run_ilda_step(
     def _report_progress(p: int) -> None:
         if progress_cb is None:
             return
-        idx = max(0, min(99, p - 1))
+
+        # Choix d'un SVG "proche" du pourcentage courant, pour la preview
+        frame_path = None
+        if svg_files:
+            idx = max(0, min(len(svg_files) - 1, int(p * len(svg_files) / 100)))
+            frame_path = svg_files[idx]
+
         progress_cb(
             FrameProgress(
                 step_name=step_name,
                 message=f"Export ILDA… {p}%",
-                frame_index=idx,
+                frame_index=p,
                 total_frames=100,
-                frame_path=None,
+                frame_path=frame_path,
             )
         )
 
@@ -72,7 +76,7 @@ def run_ilda_step(
             check_cancel=_check_cancel,
             report_progress=_report_progress,
         )
-    except Exception as e:  # chemin d'erreur simple
+    except Exception as e:
         msg = f"Erreur export ILDA : {e}"
         if progress_cb is not None:
             progress_cb(
@@ -95,9 +99,9 @@ def run_ilda_step(
             FrameProgress(
                 step_name=step_name,
                 message=f"Export ILDA terminé : {out_path.name}",
-                frame_index=99,
+                frame_index=100,
                 total_frames=100,
-                frame_path=out_path,
+                frame_path=svg_files[-1] if svg_files else None,
             )
         )
 

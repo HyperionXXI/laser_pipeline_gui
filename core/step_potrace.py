@@ -1,106 +1,96 @@
 # core/step_potrace.py
+from __future__ import annotations
 
-import subprocess
 from pathlib import Path
-import xml.etree.ElementTree as ET
+import subprocess
+from typing import Callable, Optional, List
 
 from .config import POTRACE_PATH
 
 
-def _postprocess_svg(svg_path: Path) -> None:
-    """
-    Ouvre le SVG généré par Potrace et force un rendu "ligne blanche
-    sur fond transparent" adapté au laser.
-
-    - Tous les <g> et <path> passent en fill="none"
-    - stroke="#FFFFFF", stroke-width=1, linejoin/linecap=round
-    """
-    try:
-        text = svg_path.read_text(encoding="utf-8")
-    except FileNotFoundError:
-        return
-
-    if not text.strip():
-        # SVG vide, rien à faire
-        return
-
-    try:
-        root = ET.fromstring(text)
-    except ET.ParseError:
-        # En dernier recours : on garde l'ancien replace() simple
-        text_new = text.replace(
-            'fill="#000000" stroke="none"',
-            (
-                'fill="none" '
-                'stroke="#FFFFFF" '
-                'stroke-width="1" '
-                'stroke-linejoin="round" '
-                'stroke-linecap="round"'
-            ),
-        )
-        text_new = text_new.replace('fill="#000000"', 'fill="none"')
-        if text_new != text:
-            svg_path.write_text(text_new, encoding="utf-8")
-        return
-
-    # Gestion du namespace éventuel (Potrace met parfois du SVG "nu",
-    # parfois avec xmlns)
-    def iter_all(tag):
-        # tag sans namespace, ex: "g" ou "path"
-        for elem in root.iter():
-            if elem.tag.endswith(tag):
-                yield elem
-
-    # On applique les attributs sur tous les groupes et paths
-    for elem in list(iter_all("g")) + list(iter_all("path")):
-        # Pas de remplissage
-        elem.attrib["fill"] = "none"
-        # Trait blanc
-        elem.attrib["stroke"] = "#FFFFFF"
-        # Épaisseur minimale (tu pourras l'exposer plus tard dans l'UI si besoin)
-        elem.attrib.setdefault("stroke-width", "1")
-        # Rendu plus propre
-        elem.attrib.setdefault("stroke-linejoin", "round")
-        elem.attrib.setdefault("stroke-linecap", "round")
-
-    # On ré-écrit le fichier
-    new_text = ET.tostring(root, encoding="unicode")
-    svg_path.write_text(new_text, encoding="utf-8")
-
-
 def _run_potrace_single(bmp_path: Path, svg_path: Path) -> None:
     """
-    Lance Potrace sur un BMP et génère un SVG, puis post-traite le SVG
-    pour qu'il soit adapté au laser (contours blancs, pas de fond noir).
+    Lance Potrace pour convertir un BMP en SVG.
     """
-    bmp_path = Path(bmp_path)
-    svg_path = Path(svg_path)
-
     svg_path.parent.mkdir(parents=True, exist_ok=True)
 
     cmd = [
         str(POTRACE_PATH),
-        "-s",          # sortie SVG
-        "--invert",    # ligne claire sur fond sombre -> on inverse
-        "-o", str(svg_path),
+        "-s",              # sortie SVG
+        "-o",
+        str(svg_path),
         str(bmp_path),
     ]
     subprocess.run(cmd, check=True)
 
-    _postprocess_svg(svg_path)
 
-
-def bitmap_to_svg_folder(bmp_dir: str, svg_dir: str) -> str:
+def _postprocess_svg(svg_path: Path) -> None:
     """
-    Pour chaque BMP 'frame_XXXX.bmp' du dossier bmp_dir, génère un SVG
-    'frame_XXXX.svg' dans svg_dir via Potrace + post-traitement.
+    Post-traitement du SVG généré par Potrace afin de forcer
+    un style adapté au laser (trait blanc, sans remplissage).
     """
-    bmp_dir = Path(bmp_dir)
-    svg_dir = Path(svg_dir)
-    svg_dir.mkdir(parents=True, exist_ok=True)
+    import xml.etree.ElementTree as ET
 
-    for bmp_path in sorted(bmp_dir.glob("frame_*.bmp")):
-        svg_path = svg_dir / (bmp_path.stem + ".svg")
+    tree = ET.parse(svg_path)
+    root = tree.getroot()
+
+    # Gestion simple du namespace éventuel
+    def is_tag(elem, local: str) -> bool:
+        return elem.tag == local or elem.tag.endswith("}" + local)
+
+    for elem in root.iter():
+        if is_tag(elem, "path"):
+            style = elem.get("style", "")
+            # On enlève les styles existants basés sur fill
+            # et on force stroke blanc, sans remplissage
+            elem.set("fill", "none")
+            elem.set("stroke", "#FFFFFF")
+            elem.set("stroke-width", "1")
+            elem.set("stroke-linejoin", "round")
+            elem.set("stroke-linecap", "round")
+            if "style" in elem.attrib:
+                del elem.attrib["style"]
+
+    tree.write(svg_path, encoding="utf-8")
+
+
+def bitmap_to_svg_folder(
+    bmp_dir: str,
+    svg_dir: str,
+    max_frames: Optional[int] = None,
+    frame_callback: Optional[Callable[[int, int, Path], None]] = None,
+    cancel_cb: Optional[Callable[[], bool]] = None,
+) -> str:
+    """
+    Parcourt un dossier de BMP (frame_*.bmp) et génère des SVG correspondants.
+
+    - bmp_dir : chemin vers le dossier des BMP
+    - svg_dir : dossier de sortie des SVG
+    - max_frames : limite optionnelle du nombre de frames
+    - frame_callback(idx, total, svg_path) : appelé pour chaque frame générée
+    - cancel_cb() -> bool : si True, la conversion est interrompue via RuntimeError
+    """
+    bmp_dir_p = Path(bmp_dir)
+    svg_dir_p = Path(svg_dir)
+    svg_dir_p.mkdir(parents=True, exist_ok=True)
+
+    bmp_files: List[Path] = sorted(bmp_dir_p.glob("frame_*.bmp"))
+    if max_frames is not None:
+        bmp_files = bmp_files[:max_frames]
+
+    total = len(bmp_files)
+    if total == 0:
+        raise RuntimeError(f"Aucun BMP trouvé dans {bmp_dir_p}")
+
+    for idx, bmp_path in enumerate(bmp_files, start=1):
+        if cancel_cb is not None and cancel_cb():
+            raise RuntimeError("Vectorisation Potrace annulée par l'utilisateur.")
+
+        svg_path = svg_dir_p / (bmp_path.stem + ".svg")
         _run_potrace_single(bmp_path, svg_path)
+        _postprocess_svg(svg_path)
 
-    return str(svg_dir)
+        if frame_callback is not None:
+            frame_callback(idx, total, svg_path)
+
+    return str(svg_dir_p)
