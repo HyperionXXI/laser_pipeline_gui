@@ -6,10 +6,11 @@ from typing import Callable, Optional
 
 from PySide6.QtCore import QObject, QThread, Signal, Slot
 
+from core.pipeline.base import FrameProgress, StepResult
 from core.pipeline.ffmpeg_step import run_ffmpeg_step
 from core.pipeline.bitmap_step import run_bitmap_step
 from core.pipeline.potrace_step import run_potrace_step
-from core.pipeline.base import FrameProgress, StepResult
+from core.pipeline.ilda_step import run_ilda_step
 
 LogFn = Callable[[str], None]
 
@@ -147,6 +148,32 @@ class PipelineController(QObject):
 
     def start_potrace(self, project: str) -> None:
         self._start_step("potrace", run_potrace_step, project)
+        
+
+    def start_ilda(
+        self,
+        project: str,
+        fit_axis: str = "max",
+        fill_ratio: float = 0.95,
+        min_rel_size: float = 0.01,
+    ) -> None:
+        """
+        Lance l'export ILDA pour un projet.
+
+        - project : nom du projet (dossier sous PROJECTS_ROOT)
+        - fit_axis : "max", "x", "y" (voir step_ilda)
+        - fill_ratio : 0..1
+        - min_rel_size : filtre de chemins parasites
+        """
+        self._start_step(
+            step_name="ilda",
+            step_func=run_ilda_step,
+            project=project,
+            fit_axis=fit_axis,
+            fill_ratio=fill_ratio,
+            min_rel_size=min_rel_size,
+        )
+
 
     def cancel_current_step(self) -> None:
         if self._worker is not None:
