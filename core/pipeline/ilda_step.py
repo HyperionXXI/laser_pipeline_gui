@@ -13,6 +13,8 @@ def run_ilda_step(
     fit_axis: str = "max",
     fill_ratio: float = 0.95,
     min_rel_size: float = 0.01,
+    remove_outer_frame: bool = True,
+    frame_margin_rel: float = 0.02,
     progress_cb: Optional[ProgressCallback] = None,
     cancel_cb: Optional[CancelCallback] = None,
 ) -> StepResult:
@@ -23,13 +25,14 @@ def run_ilda_step(
     - Fichier .ild généré dans projects/<project>/ilda/<project>.ild
 
     Paramètres:
-      - fit_axis : "max", "x" ou "y"
-      - fill_ratio : fraction de la fenêtre ILDA utilisée (0..1)
-      - min_rel_size : filtre des petits chemins (parasites)
+      - fit_axis : "max", "x", "y"
+      - fill_ratio : 0..1
+      - min_rel_size : filtre de chemins parasites (petites lignes)
+      - remove_outer_frame : supprime le cadre global (si détecté)
+      - frame_margin_rel : tolérance relative pour détecter ce cadre
     """
     step_name = "ilda"
 
-    # Progrès 0 % : démarrage
     if progress_cb is not None:
         progress_cb(
             FrameProgress(
@@ -45,17 +48,18 @@ def run_ilda_step(
         return cancel_cb is not None and cancel_cb()
 
     def _report_progress(p: int) -> None:
-        # p ∈ [0..100]
-        if progress_cb is not None:
-            progress_cb(
-                FrameProgress(
-                    step_name=step_name,
-                    message=f"Export ILDA… {p}%",
-                    frame_index=p,
-                    total_frames=100,
-                    frame_path=None,
-                )
+        if progress_cb is None:
+            return
+        idx = max(0, min(99, p - 1))
+        progress_cb(
+            FrameProgress(
+                step_name=step_name,
+                message=f"Export ILDA… {p}%",
+                frame_index=idx,
+                total_frames=100,
+                frame_path=None,
             )
+        )
 
     try:
         out_path: Path = export_project_to_ilda(
@@ -63,10 +67,12 @@ def run_ilda_step(
             fit_axis=fit_axis,
             fill_ratio=fill_ratio,
             min_rel_size=min_rel_size,
+            remove_outer_frame=remove_outer_frame,
+            frame_margin_rel=frame_margin_rel,
             check_cancel=_check_cancel,
             report_progress=_report_progress,
         )
-    except Exception as e:  # pragma: no cover - chemin d'erreur simple
+    except Exception as e:  # chemin d'erreur simple
         msg = f"Erreur export ILDA : {e}"
         if progress_cb is not None:
             progress_cb(
@@ -84,13 +90,12 @@ def run_ilda_step(
             output_dir=None,
         )
 
-    # Progrès 100 % : terminé
     if progress_cb is not None:
         progress_cb(
             FrameProgress(
                 step_name=step_name,
                 message=f"Export ILDA terminé : {out_path.name}",
-                frame_index=100,
+                frame_index=99,
                 total_frames=100,
                 frame_path=out_path,
             )

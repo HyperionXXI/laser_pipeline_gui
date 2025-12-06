@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import List, Tuple, Callable
+from typing import List, Tuple, Callable, Optional
 import re
 import xml.etree.ElementTree as ET
 
@@ -11,16 +11,13 @@ from .ilda_writer import (
     IldaPoint as ILDAPoint,
     IldaFrame as ILDAFrame,
     write_ilda_file,
-    write_demo_square,  # <-- ré-export pour les tests / scripts existants
+    write_demo_square,  # Ré-export pour compatibilité éventuelle
 )
 
 # ======================================================================
 # SVG → polyline(s) → points ILDA
 # ======================================================================
 
-# Regex pour parser les commandes de path SVG :
-# - commandes : M/m, L/l, H/h, V/v, C/c, Z/z
-# - nombres : flottants, avec éventuel exposant
 _PATH_TOKEN_RE = re.compile(
     r"([MmLlHhVvCcZz])|(-?\d*\.?\d+(?:[eE][+\-]?\d+)?)"
 )
@@ -36,7 +33,7 @@ def _sample_cubic_bezier(p0, p1, p2, p3, steps: int = 16):
     pts = []
     for i in range(steps + 1):
         t = i / steps
-        u = 1.0 - t  # formule de Bézier cubique
+        u = 1.0 - t
         x = (
             u * u * u * x0
             + 3 * u * u * t * x1
@@ -93,23 +90,18 @@ def _parse_svg_path_d(
 
     for cmd, num in tokens:
         if cmd:
-            # nouvelle commande
             current_cmd = cmd
             buf = []
             if cmd in "Zz":
-                # on ferme le path sur son premier point
                 if current_path:
                     current_path.append(current_path[0])
                 continue
-            continue  # on attend les nombres
+            continue
 
-        # ici : nombre
         v = float(num)
         buf.append(v)
 
-        # --------------------------------------------------
-        # M/m : moveto (premier point d'un sous-chemin)
-        # --------------------------------------------------
+        # M/m : moveto
         if current_cmd in ("M", "m"):
             while len(buf) >= 2:
                 nx, ny = buf[0], buf[1]
@@ -118,12 +110,9 @@ def _parse_svg_path_d(
                     nx += x
                     ny += y
                 start_new_path(nx, ny)
-            # spec : après le premier couple, M devient L implicite
             current_cmd = "L" if current_cmd == "M" else "l"
 
-        # --------------------------------------------------
         # L/l : lineto
-        # --------------------------------------------------
         elif current_cmd in ("L", "l"):
             while len(buf) >= 2:
                 nx, ny = buf[0], buf[1]
@@ -133,9 +122,7 @@ def _parse_svg_path_d(
                     ny += y
                 add_point(nx, ny)
 
-        # --------------------------------------------------
         # H/h : horizontal lineto
-        # --------------------------------------------------
         elif current_cmd in ("H", "h"):
             while buf:
                 nx = buf.pop(0)
@@ -143,9 +130,7 @@ def _parse_svg_path_d(
                     nx += x
                 add_point(nx, y)
 
-        # --------------------------------------------------
         # V/v : vertical lineto
-        # --------------------------------------------------
         elif current_cmd in ("V", "v"):
             while buf:
                 ny = buf.pop(0)
@@ -153,9 +138,7 @@ def _parse_svg_path_d(
                     ny += y
                 add_point(x, ny)
 
-        # --------------------------------------------------
         # C/c : cubic Bézier
-        # --------------------------------------------------
         elif current_cmd in ("C", "c"):
             while len(buf) >= 6:
                 x1, y1, x2, y2, x3, y3 = buf[0:6]
@@ -171,11 +154,9 @@ def _parse_svg_path_d(
                 p1 = (x1, y1)
                 p2 = (x2, y2)
                 p3 = (x3, y3)
-                # approxime la courbe en polyline
                 samples = _sample_cubic_bezier(
                     p0, p1, p2, p3, steps=curve_steps
                 )
-                # on a déjà p0 dans current_path, donc on ignore le premier
                 for (sx, sy) in samples[1:]:
                     add_point(sx, sy)
 
@@ -231,7 +212,6 @@ def _parse_transform(s: str):
             sy = args[1] if len(args) > 1 else sx
             tm = (sx, 0.0, 0.0, sy, 0.0, 0.0)
         else:
-            # autres transforms (rotate, matrix, ...) ignorées pour l'instant
             continue
         m = _mult_m(m, tm)
     return m
@@ -243,7 +223,6 @@ def _apply_matrix(m, x: float, y: float) -> Tuple[float, float]:
 
 
 def _is_tag(elem, local_name: str) -> bool:
-    # gestion naïve des namespaces
     return elem.tag.endswith("}" + local_name) or elem.tag == local_name
 
 
@@ -251,8 +230,6 @@ def _load_svg_paths(svg_path: Path, curve_steps: int = 20) -> List[List[Tuple[fl
     """
     Charge un SVG et retourne la liste des polylignes (liste de points)
     après application des transforms (translate/scale).
-
-    Chaque entrée est une liste de (x, y) en coordonnées écran SVG.
     """
     tree = ET.parse(svg_path)
     root = tree.getroot()
@@ -266,7 +243,7 @@ def _load_svg_paths(svg_path: Path, curve_steps: int = 20) -> List[List[Tuple[fl
             tm = _parse_transform(tr)
             m = _mult_m(parent_m, tm)
 
-        subpaths: List[List[Tuple[float, float]]] | None = None
+        subpaths: Optional[List[List[Tuple[float, float]]]] = None
 
         if _is_tag(elem, "path"):
             d = elem.get("d") or ""
@@ -281,7 +258,7 @@ def _load_svg_paths(svg_path: Path, curve_steps: int = 20) -> List[List[Tuple[fl
                     pass
             xy = list(zip(coords[0::2], coords[1::2]))
             if _is_tag(elem, "polygon") and xy:
-                xy.append(xy[0])  # fermer
+                xy.append(xy[0])
             subpaths = [xy]
 
         if subpaths:
@@ -315,12 +292,22 @@ def _compute_bounds(
     return min(xs), max(xs), min(ys), max(ys)
 
 
+def _is_closed_path(path: List[Tuple[float, float]], tol: float) -> bool:
+    if len(path) < 3:
+        return False
+    (x0, y0) = path[0]
+    (x1, y1) = path[-1]
+    return abs(x0 - x1) + abs(y0 - y1) <= tol
+
+
 def _paths_to_ilda_points(
     paths: List[List[Tuple[float, float]]],
     bounds: Tuple[float, float, float, float],
     min_rel_size: float = 0.01,
     fill_ratio: float = 0.95,
-    fit_axis: str = "max",  # "max" (défaut), "x" ou "y"
+    fit_axis: str = "max",   # "max" (défaut), "x" ou "y"
+    remove_outer_frame: bool = True,
+    frame_margin_rel: float = 0.02,
 ) -> List[ILDAPoint]:
     """
     Normalise des chemins (liste de listes de (x,y)) dans l'espace ILDA.
@@ -328,18 +315,15 @@ def _paths_to_ilda_points(
     - bounding box commune fournie par 'bounds'
     - Z = 0, couleur = blanc
     - début de chaque sous-chemin en 'blanked=True'
-    - supprime les paths trop petits (lignes parasites) :
-      taille < min_rel_size * taille_globale
-    - fill_ratio : fraction de la fenêtre ILDA utilisée (0.0..1.0)
-    - fit_axis : "max" (comportement actuel), "x" (remplit la largeur),
-                 "y" (remplit la hauteur)
+    - supprime les paths trop petits (lignes parasites)
+    - si remove_outer_frame=True, supprime un grand path fermé dont
+      la bounding box colle à la bounding box globale (cadre extérieur)
     """
     min_x, max_x, min_y, max_y = bounds
     span_x = max_x - min_x or 1.0
     span_y = max_y - min_y or 1.0
     global_span = max(span_x, span_y)
 
-    # Choix de l’axe de référence pour le scale
     if fit_axis == "x":
         base_span = span_x
     elif fit_axis == "y":
@@ -353,26 +337,40 @@ def _paths_to_ilda_points(
 
     result: List[ILDAPoint] = []
 
+    frame_tol = global_span * frame_margin_rel
+
     for path in paths:
         if len(path) < 2:
             continue
 
-        # Taille locale du path
         xs = [x for x, _ in path]
         ys = [y for _, y in path]
         span_px = (max(xs) - min(xs)) or 0.0
         span_py = (max(ys) - min(ys)) or 0.0
         path_span = max(span_px, span_py)
 
-        # Filtre anti-poussière : on ignore les paths trop petits
+        # 1) Option : suppression du cadre extérieur
+        if remove_outer_frame and len(path) >= 4 and path_span > 0:
+            # grand path fermé dont la bbox colle à la bbox globale
+            if _is_closed_path(path, tol=frame_tol):
+                near_left   = abs(min(xs) - min_x) <= frame_tol
+                near_right  = abs(max(xs) - max_x) <= frame_tol
+                near_bottom = abs(min(ys) - min_y) <= frame_tol
+                near_top    = abs(max(ys) - max_y) <= frame_tol
+
+                # Il "encadre" pratiquement toute la scène
+                if near_left and near_right and near_bottom and near_top:
+                    # On considère que c'est un cadre décoratif → on l'ignore
+                    continue
+
+        # 2) Filtre anti-poussière : paths trop petits
         if path_span < global_span * min_rel_size:
             continue
 
         first = True
         for x, y in path:
             nx = int(round((x - cx) * scale))
-            # Inversion Y : SVG (origine en haut) -> ILDA (origine au centre, Y vers le haut)
-            ny = int(round((cy - y) * scale))
+            ny = int(round((cy - y) * scale))  # inversion Y
 
             result.append(
                 ILDAPoint(
@@ -392,12 +390,17 @@ def svg_to_points(svg_path: Path) -> List[ILDAPoint]:
     """
     API simple : convertit un fichier SVG isolé en liste de ILDAPoint.
     Utilise la bounding box de CE seul fichier pour la normalisation.
+    (Sans suppression de cadre global, car il n'y en a pas sur un seul fichier.)
     """
     paths = _load_svg_paths(Path(svg_path))
     if not paths:
         return []
     bounds = _compute_bounds([paths])
-    return _paths_to_ilda_points(paths, bounds)
+    return _paths_to_ilda_points(
+        paths,
+        bounds,
+        remove_outer_frame=False,  # sur un seul fichier, on ne peut pas savoir
+    )
 
 
 # ======================================================================
@@ -410,8 +413,10 @@ def export_project_to_ilda(
     fit_axis: str = "max",
     fill_ratio: float = 0.95,
     min_rel_size: float = 0.01,
-    check_cancel: Callable[[], bool] | None = None,
-    report_progress: Callable[[int], None] | None = None,
+    remove_outer_frame: bool = True,
+    frame_margin_rel: float = 0.02,
+    check_cancel: Optional[Callable[[], bool]] = None,
+    report_progress: Optional[Callable[[int], None]] = None,
 ) -> Path:
     """
     Export ILDA pour un projet donné.
@@ -419,11 +424,10 @@ def export_project_to_ilda(
     - Cherche les SVG dans projects/<project>/svg/frame_*.svg
     - Calcule une bounding box GLOBALE sur l'ensemble des SVG pour
       garantir une taille et un centrage stables d'une frame à l'autre.
+    - Si remove_outer_frame=True : supprime un éventuel cadre qui colle
+      à cette bounding box globale (typique La Linea).
     - Écrit un fichier .ild dans projects/<project>/ilda/<project>.ild
     - Retourne le Path du fichier créé.
-
-    check_cancel() → si fourni, permet d'interrompre proprement.
-    report_progress(p) avec p ∈ [0..100] pour la barre de progression.
     """
     project_root = PROJECTS_ROOT / project_name
     svg_dir = project_root / "svg"
@@ -434,14 +438,13 @@ def export_project_to_ilda(
     if not svg_files:
         raise RuntimeError(f"Aucun SVG trouvé dans {svg_dir}")
 
-    # 1) Première passe : charger les chemins et accumuler la bbox
+    # 1) Première passe : charger les chemins et accumuler la bbox globale
     per_frame_paths: List[List[List[Tuple[float, float]]]] = []
     for svg_file in svg_files:
         if check_cancel is not None and check_cancel():
             raise RuntimeError("Export ILDA annulé par l'utilisateur (phase 1).")
         paths = _load_svg_paths(svg_file)
         if not paths:
-            # on ignore les frames vides
             continue
         per_frame_paths.append(paths)
 
@@ -466,6 +469,8 @@ def export_project_to_ilda(
             min_rel_size=min_rel_size,
             fill_ratio=fill_ratio,
             fit_axis=fit_axis,
+            remove_outer_frame=remove_outer_frame,
+            frame_margin_rel=frame_margin_rel,
         )
 
         frame = ILDAFrame(
