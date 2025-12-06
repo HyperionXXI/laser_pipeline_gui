@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
-
+from datetime import datetime
 from core.pipeline.base import FrameProgress
 from core.config import PROJECTS_ROOT
 
@@ -248,7 +248,9 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------
 
     def log(self, text: str) -> None:
-        self.log_view.append(text)
+        ts = datetime.now().strftime("[%H:%M:%S]")
+        self.log_view.append(f"{ts} {text}")
+
 
     def set_busy(self, busy: bool) -> None:
         if busy:

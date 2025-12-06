@@ -53,7 +53,7 @@ class RasterPreview(QWidget):
 class SvgPreview(QWidget):
     """
     Widget pour afficher un SVG via QSvgRenderer, avec :
-      - fond blanc (pour bien voir les traits noirs),
+      - fond noir (cohérent avec le pipeline : trait blanc),
       - mise à l'échelle uniforme,
       - centrage du contenu.
 
@@ -68,7 +68,7 @@ class SvgPreview(QWidget):
         self._svg_path: str | None = None
 
         self.setMinimumSize(240, 180)
-        # Le fond sera peint en blanc dans paintEvent
+        # Le fond sera peint en noir dans paintEvent
 
     def show_svg(self, path: str | Path) -> None:
         """
@@ -82,8 +82,8 @@ class SvgPreview(QWidget):
     def paintEvent(self, event) -> None:  # type: ignore[override]
         painter = QPainter(self)
 
-        # Fond blanc pour que les traits noirs soient visibles
-        painter.fillRect(self.rect(), Qt.white)
+        # Fond noir pour que les traits blancs soient visibles
+        painter.fillRect(self.rect(), Qt.black)
 
         if not self._renderer.isValid():
             return
