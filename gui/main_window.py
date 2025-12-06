@@ -2,10 +2,10 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
+
 from core.pipeline.base import FrameProgress
 from core.config import PROJECTS_ROOT
-from core.step_potrace import bitmap_to_svg_folder
-from core.step_ilda import export_project_to_ilda
+
 from .preview_widgets import RasterPreview, SvgPreview
 from .pipeline_controller import PipelineController
 
@@ -271,7 +271,8 @@ class MainWindow(QMainWindow):
     @Slot(str, object)
     def on_step_finished(self, step_name: str, result) -> None:
         """
-        Step terminé (succès). On arrête le mode busy et on log le message final.
+        Step terminé (succès).
+        On arrête le mode busy et on log le message final.
         Les previews image par image sont déjà gérées par on_step_progress.
         """
         self.set_busy(False)
@@ -279,6 +280,13 @@ class MainWindow(QMainWindow):
         msg = getattr(result, "message", "")
         if msg:
             self.log(f"[{step_name}] {msg}")
+
+        # Mise à jour de la preview ILDA quand l'export est terminé
+        if step_name == "ilda" and getattr(result, "success", False):
+            project = (self.edit_project.text() or "").strip()
+            if project:
+                self._update_ilda_preview(project)
+
 
     @Slot(str, str)
     def on_step_error(self, step_name: str, message: str) -> None:
@@ -409,19 +417,26 @@ class MainWindow(QMainWindow):
             self.log("Erreur ILDA : nom de projet vide.")
             return
 
-        self.log(f"[ILDA] Export ILDA pour le projet '{project}'...")
+        self.log(f"[ILDA] Export ILDA pour le projet '{project}' (pipeline)…")
+        self.pipeline.start_ilda(project)
 
-        # Export synchrone (pour l'instant)
-        out_path = export_project_to_ilda(project)
-        self.log(f"[ILDA] Terminé. Fichier : {out_path}")
 
-        # Prévisualisation approximative : on affiche la première PNG du projet
+    def _update_ilda_preview(self, project: str) -> None:
+        """
+        Met à jour la prévisualisation ILDA après un export.
+
+        Pour l'instant, on ne sait pas rasteriser directement un .ild,
+        donc on affiche la première frame PNG comme approximation.
+        """
         project_root = PROJECTS_ROOT / project
         png_dir = project_root / "frames"
         first_png = self._find_first_frame(png_dir)
+
         if first_png:
             self.preview_ilda.show_image(str(first_png))
             self.log(f"[Preview] ILDA approx à partir de : {first_png}")
+        else:
+            self.log("[Preview] Aucune frame PNG trouvée pour la prévisualisation ILDA.")
 
     def on_preview_frame(self) -> None:
         project = (self.edit_project.text() or "").strip()

@@ -6,12 +6,14 @@ from typing import Callable, Optional
 
 from PySide6.QtCore import QObject, QThread, Signal, Slot
 
-from core.pipeline.base import FrameProgress, StepResult
 from core.pipeline.ffmpeg_step import run_ffmpeg_step
 from core.pipeline.bitmap_step import run_bitmap_step
 from core.pipeline.potrace_step import run_potrace_step
 from core.pipeline.ilda_step import run_ilda_step
+from core.pipeline.base import FrameProgress, StepResult
 
+
+# Type alias: fonction de log appelée par le contrôleur
 LogFn = Callable[[str], None]
 
 
@@ -19,9 +21,10 @@ class _StepWorker(QObject):
     """
     Worker générique utilisé en interne par PipelineController.
     """
-    finished = Signal(object)   # StepResult
+
+    finished = Signal(object)  # StepResult
     error = Signal(str)
-    progress = Signal(object)   # FrameProgress
+    progress = Signal(object)  # FrameProgress
 
     def __init__(self, step_func: Callable[..., StepResult], *args, **kwargs) -> None:
         super().__init__()
@@ -56,19 +59,17 @@ class _StepWorker(QObject):
 
 class PipelineController(QObject):
     """
-    Contrôleur de pipeline : encapsule ffmpeg, bitmap, potrace, etc.
+    Contrôleur de pipeline : encapsule ffmpeg, bitmap, potrace, ilda, etc.
     """
 
-    step_started = Signal(str)          # "ffmpeg", "bitmap", ...
-    step_finished = Signal(str, object) # step_name, StepResult
-    step_error = Signal(str, str)       # step_name, message
-    step_progress = Signal(str, object) # step_name, FrameProgress
+    step_started = Signal(str)            # "ffmpeg", "bitmap", ...
+    step_finished = Signal(str, object)   # step_name, StepResult
+    step_error = Signal(str, str)        # step_name, message
+    step_progress = Signal(str, object)   # step_name, FrameProgress
 
-    def __init__(self, parent: Optional[QObject] = None,
-                 log_fn: Optional[LogFn] = None) -> None:
+    def __init__(self, parent: Optional[QObject] = None, log_fn: Optional[LogFn] = None) -> None:
         super().__init__(parent)
         self._log = log_fn or (lambda msg: None)
-
         self._thread: Optional[QThread] = None
         self._worker: Optional[_StepWorker] = None
         self._current_step: Optional[str] = None
@@ -76,11 +77,13 @@ class PipelineController(QObject):
     # ------------------------------------------------------------------
     # Gestion générique d'un step
     # ------------------------------------------------------------------
-
-    def _start_step(self,
-                    step_name: str,
-                    step_func: Callable[..., StepResult],
-                    *args, **kwargs) -> None:
+    def _start_step(
+        self,
+        step_name: str,
+        step_func: Callable[..., StepResult],
+        *args,
+        **kwargs,
+    ) -> None:
         if self._thread is not None:
             self._log(f"[Pipeline] Un step est déjà en cours ({self._current_step}).")
             return
@@ -121,22 +124,22 @@ class PipelineController(QObject):
 
         self._thread = thread
         self._worker = worker
-
         self.step_started.emit(step_name)
         thread.start()
 
     # ------------------------------------------------------------------
     # API publique pour la GUI
     # ------------------------------------------------------------------
-
     def start_ffmpeg(self, video_path: str, project: str, fps: int) -> None:
         self._start_step("ffmpeg", run_ffmpeg_step, video_path, project, fps)
 
-    def start_bitmap(self,
-                     project: str,
-                     threshold: int,
-                     use_thinning: bool,
-                     max_frames: Optional[int]) -> None:
+    def start_bitmap(
+        self,
+        project: str,
+        threshold: int,
+        use_thinning: bool,
+        max_frames: Optional[int],
+    ) -> None:
         self._start_step(
             "bitmap",
             run_bitmap_step,
@@ -148,7 +151,6 @@ class PipelineController(QObject):
 
     def start_potrace(self, project: str) -> None:
         self._start_step("potrace", run_potrace_step, project)
-        
 
     def start_ilda(
         self,
@@ -158,22 +160,16 @@ class PipelineController(QObject):
         min_rel_size: float = 0.01,
     ) -> None:
         """
-        Lance l'export ILDA pour un projet.
-
-        - project : nom du projet (dossier sous PROJECTS_ROOT)
-        - fit_axis : "max", "x", "y" (voir step_ilda)
-        - fill_ratio : 0..1
-        - min_rel_size : filtre de chemins parasites
+        Lance l'export ILDA (SVG -> .ild) pour un projet.
         """
         self._start_step(
-            step_name="ilda",
-            step_func=run_ilda_step,
-            project=project,
-            fit_axis=fit_axis,
-            fill_ratio=fill_ratio,
-            min_rel_size=min_rel_size,
+            "ilda",
+            run_ilda_step,
+            project,
+            fit_axis,
+            fill_ratio,
+            min_rel_size,
         )
-
 
     def cancel_current_step(self) -> None:
         if self._worker is not None:
