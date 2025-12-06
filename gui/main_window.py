@@ -9,7 +9,7 @@ from core.config import PROJECTS_ROOT
 from .preview_widgets import RasterPreview, SvgPreview
 from .pipeline_controller import PipelineController
 
-from PySide6.QtCore import Qt, Slot
+from PySide6.QtCore import Slot
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -26,6 +26,7 @@ from PySide6.QtWidgets import (
     QSizePolicy,
     QProgressBar,
 )
+
 
 class MainWindow(QMainWindow):
     def __init__(self) -> None:
@@ -211,9 +212,9 @@ class MainWindow(QMainWindow):
         step4_layout.addStretch()
         col4_layout.addWidget(group_step4)
 
-        group_prev4 = QGroupBox("Prévisualisation ILDA (raster approx.)")
+        group_prev4 = QGroupBox("Prévisualisation ILDA (vectorisée)")
         prev4_layout = QVBoxLayout(group_prev4)
-        self.preview_ilda = RasterPreview()
+        self.preview_ilda = SvgPreview()
         self.preview_ilda.setMinimumSize(240, 180)
         prev4_layout.addWidget(self.preview_ilda)
         col4_layout.addWidget(group_prev4)
@@ -287,7 +288,6 @@ class MainWindow(QMainWindow):
             if project:
                 self._update_ilda_preview(project)
 
-
     @Slot(str, str)
     def on_step_error(self, step_name: str, message: str) -> None:
         self.set_busy(False)
@@ -320,7 +320,10 @@ class MainWindow(QMainWindow):
             self.preview_bmp.show_image(path_str)
         elif step_name == "potrace":
             self.preview_svg.show_svg(path_str)
-
+        elif step_name == "ilda":
+            # On affiche les SVG utilisés pour construire le ILDA,
+            # c'est une approximation visuelle mais suffisante.
+            self.preview_ilda.show_svg(path_str)
 
     # ------------------------------------------------------------------
     # Callbacks UI
@@ -400,7 +403,7 @@ class MainWindow(QMainWindow):
             max_frames=max_frames,
         )
 
-    def on_potrace_click(self):
+    def on_potrace_click(self) -> None:
         """Lance la vectorisation BMP -> SVG via Potrace (pipeline)."""
         project = (self.edit_project.text() or "").strip()
         if not project:
@@ -410,41 +413,54 @@ class MainWindow(QMainWindow):
         self.log(f"[Potrace] Vectorisation BMP -> SVG pour le projet '{project}'...")
         self.pipeline.start_potrace(project)
 
-
     def on_export_ilda_click(self) -> None:
+        """
+        Lance l'export ILDA via le pipeline (step 'ilda').
+        """
         project = (self.edit_project.text() or "").strip()
         if not project:
             self.log("Erreur ILDA : nom de projet vide.")
             return
 
         self.log(f"[ILDA] Export ILDA pour le projet '{project}' (pipeline)…")
+        # Nécessite que PipelineController expose start_ilda(project)
         self.pipeline.start_ilda(project)
 
+    # ------------------------------------------------------------------
+    # Helpers et preview manuelle
+    # ------------------------------------------------------------------
 
     def _update_ilda_preview(self, project: str) -> None:
         """
         Met à jour la prévisualisation ILDA après un export.
 
-        Pour l'instant, on ne sait pas rasteriser directement un .ild,
-        donc on affiche la première frame PNG comme approximation.
+        On ne rasterise toujours pas directement le .ild, donc on affiche
+        la première frame SVG comme approximation de la sortie ILDA.
         """
         project_root = PROJECTS_ROOT / project
-        png_dir = project_root / "frames"
-        first_png = self._find_first_frame(png_dir)
+        svg_dir = project_root / "svg"
+        first_svg = self._find_first_frame(svg_dir, pattern="frame_*.svg")
 
-        if first_png:
-            self.preview_ilda.show_image(str(first_png))
-            self.log(f"[Preview] ILDA approx à partir de : {first_png}")
+        if first_svg:
+            self.preview_ilda.show_svg(str(first_svg))
+            self.log(f"[Preview] ILDA approx à partir de : {first_svg}")
         else:
-            self.log("[Preview] Aucune frame PNG trouvée pour la prévisualisation ILDA.")
+            self.log(
+                "[Preview] Aucune frame SVG trouvée pour la prévisualisation ILDA."
+            )
 
     def on_preview_frame(self) -> None:
+        """
+        Prévisualise une frame donnée (index dans self.spin_frame)
+        pour les trois étapes intermédiaires : PNG, BMP, SVG.
+        """
         project = (self.edit_project.text() or "").strip()
         if not project:
             self.log("Erreur prévisualisation : nom de projet vide.")
             return
 
         frame_index = self.spin_frame.value()
+
         project_root = PROJECTS_ROOT / project
         png_dir = project_root / "frames"
         bmp_dir = project_root / "bmp"
@@ -454,29 +470,39 @@ class MainWindow(QMainWindow):
         bmp_path = bmp_dir / f"frame_{frame_index:04d}.bmp"
         svg_path = svg_dir / f"frame_{frame_index:04d}.svg"
 
+        # PNG
         self.log(f"[Preview] Frame {frame_index} (PNG) → {png_path}")
         self.preview_png.show_image(str(png_path))
 
+        # BMP
         self.log(f"[Preview] Frame {frame_index} (BMP) → {bmp_path}")
         self.preview_bmp.show_image(str(bmp_path))
 
+        # SVG
         self.log(f"[Preview] Frame {frame_index} (SVG) → {svg_path}")
         self.preview_svg.show_svg(str(svg_path))
 
     def on_cancel_task(self) -> None:
+        """
+        Demande l'annulation du step en cours au PipelineController.
+        """
         self.pipeline.cancel_current_step()
 
     # ------------------------------------------------------------------
     # Helpers pour trouver la "dernière" ou "première" frame d'un dossier
     # ------------------------------------------------------------------
 
-    def _find_last_frame(self, directory: Path, pattern: str = "frame_*.png") -> Path | None:
+    def _find_last_frame(
+        self, directory: Path, pattern: str = "frame_*.png"
+    ) -> Path | None:
         if not directory.exists():
             return None
         files = sorted(directory.glob(pattern))
         return files[-1] if files else None
 
-    def _find_first_frame(self, directory: Path, pattern: str = "frame_*.png") -> Path | None:
+    def _find_first_frame(
+        self, directory: Path, pattern: str = "frame_*.png"
+    ) -> Path | None:
         if not directory.exists():
             return None
         files = sorted(directory.glob(pattern))
