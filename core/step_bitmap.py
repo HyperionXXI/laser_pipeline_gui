@@ -1,12 +1,11 @@
 # core/step_bitmap.py
-
 from __future__ import annotations
 
 from pathlib import Path
 import subprocess
 from typing import Optional, Callable
 
-from .config import PROJECTS_ROOT
+from .config import PROJECTS_ROOT, MAGICK_PATH
 
 
 def convert_png_to_bmp(
@@ -25,10 +24,12 @@ def convert_png_to_bmp(
 
     # Commande de base : gris -> seuil -> BMP
     cmd = [
-        "magick",
+        str(MAGICK_PATH),
         str(png_path),
-        "-colorspace", "Gray",
-        "-threshold", f"{threshold}%",
+        "-colorspace",
+        "Gray",
+        "-threshold",
+        f"{threshold}%",
     ]
 
     if thinning:
@@ -47,14 +48,14 @@ def convert_project_frames_to_bmp(
     frame_callback: Optional[Callable[[int, int, Path], None]] = None,
 ) -> Path:
     """
-    Parcourt projects/<project_name>/frames/frame_*.png et génère
-    projects/<project_name>/bmp/frame_*.bmp.
+    Parcourt projects/<project>/frames/frame_*.png et génère
+    projects/<project>/bmp/frame_*.bmp.
 
-    - threshold      : 0..100 (%)
-    - use_thinning   : applique ou non le Thinning
-    - max_frames     : si non None, limite au N premières frames
+    - threshold : 0..100 (%)
+    - use_thinning : applique ou non le Thinning
+    - max_frames : si non None, limite au N premières frames
     - frame_callback : appelé à chaque frame générée :
-                       frame_callback(index_1_based, total_frames, bmp_path)
+      frame_callback(index_1_based, total_frames, bmp_path)
     """
     project_root = PROJECTS_ROOT / project_name
     frames_dir = project_root / "frames"

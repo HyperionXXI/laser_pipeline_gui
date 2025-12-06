@@ -11,15 +11,16 @@ class FrameProgress:
     """
     Représente l'avancement d'un step.
 
-    - step_name    : étiquette du step ("ffmpeg", "bitmap", "potrace", ...)
-    - message      : texte optionnel pour le log
-    - frame_index  : index de frame déjà traitée (0-based ou 1-based)
+    - step_name : étiquette du step ("ffmpeg", "bitmap", "potrace", ...)
+    - message : texte optionnel pour le log
+    - frame_index : index de frame déjà traitée (0-based ou 1-based) ou None
     - total_frames : nombre total de frames si connu, sinon None
-    - frame_path   : chemin de la dernière frame écrite (PNG/BMP/SVG...)
+    - frame_path : chemin de la dernière frame écrite (PNG/BMP/SVG...)
     """
+
     step_name: str
     message: str = ""
-    frame_index: int = 0
+    frame_index: Optional[int] = None
     total_frames: Optional[int] = None
     frame_path: Optional[Path] = None
 
@@ -29,10 +30,11 @@ class StepResult:
     """
     Résultat global d'un step de pipeline.
 
-    - success    : True si tout s'est bien passé
-    - message    : résumé textuel
+    - success : True si tout s'est bien passé
+    - message : résumé textuel
     - output_dir : répertoire de sortie principal du step
     """
+
     success: bool
     message: str
     output_dir: Optional[Path] = None

@@ -1,37 +1,30 @@
 # core/pipeline/potrace_step.py
-
 from __future__ import annotations
 
 from pathlib import Path
 from typing import Optional
 
-from .base import (
-    FrameProgress,
-    StepResult,
-    ProgressCallback,
-    CancelCallback,
-)
 from core.config import PROJECTS_ROOT
 from core.step_potrace import bitmap_to_svg_folder
-from core.pipeline.base import StepResult, FrameProgress, ProgressCallback, CancelCallback
+from .base import FrameProgress, StepResult, ProgressCallback, CancelCallback
+
 
 def run_potrace_step(
     project: str,
     progress_cb: Optional[ProgressCallback] = None,
-    cancel_cb: Optional[CancelCallback] = None,
+    cancel_cb: Optional[CancelCallback] = None,  # réservé pour évolution
 ) -> StepResult:
     """
     Step pipeline : BMP -> SVG via Potrace pour un projet donné.
 
-    - BMP attendus dans  projects/<project>/bmp
-    - SVG écrits dans   projects/<project>/svg
+    - BMP attendus dans projects/<project>/bmp
+    - SVG écrits dans projects/<project>/svg
 
     Retourne un StepResult :
-        success     : bool
-        message     : str humain lisible
-        output_dir  : Path du dossier contenant les SVG
+      - success : bool
+      - message : str humain lisible
+      - output_dir : Path du dossier contenant les SVG
     """
-
     step_name = "potrace"
 
     # Signal de démarrage (optionnel)
@@ -40,7 +33,7 @@ def run_potrace_step(
             FrameProgress(
                 step_name=step_name,
                 message="Démarrage Potrace…",
-                frame_index=None,
+                frame_index=0,
                 total_frames=None,
                 frame_path=None,
             )
@@ -53,17 +46,18 @@ def run_potrace_step(
 
     # NOTE : pour l’instant, on ne peut pas annuler "au milieu"
     # de bitmap_to_svg_folder, donc cancel_cb n’est pas exploité.
+
     try:
         out_dir_str = bitmap_to_svg_folder(str(bmp_dir), str(svg_dir))
         out_dir = Path(out_dir_str)
-    except Exception as e:
+    except Exception as e:  # pragma: no cover - chemin d'erreur simple
         msg = f"Erreur Potrace : {e}"
         if progress_cb is not None:
             progress_cb(
                 FrameProgress(
                     step_name=step_name,
                     message=msg,
-                    frame_index=None,
+                    frame_index=0,
                     total_frames=None,
                     frame_path=None,
                 )
@@ -82,7 +76,7 @@ def run_potrace_step(
             FrameProgress(
                 step_name=step_name,
                 message="Vectorisation terminée.",
-                frame_index=None,
+                frame_index=0,
                 total_frames=None,
                 frame_path=last_svg,
             )
