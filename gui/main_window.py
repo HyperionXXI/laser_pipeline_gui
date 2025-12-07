@@ -214,9 +214,9 @@ class MainWindow(QMainWindow):
         step4_layout.addStretch()
         col4_layout.addWidget(group_step4)
 
-        group_prev4 = QGroupBox("Prévisualisation ILDA (vectorisée)")
+        group_prev4 = QGroupBox("Prévisualisation ILDA (fichier .ild)")
         prev4_layout = QVBoxLayout(group_prev4)
-        self.preview_ilda = SvgPreview()
+        self.preview_ilda = RasterPreview()
         self.preview_ilda.setMinimumSize(240, 180)
         prev4_layout.addWidget(self.preview_ilda)
         col4_layout.addWidget(group_prev4)
@@ -255,7 +255,6 @@ class MainWindow(QMainWindow):
         # Auto-scroll vers la dernière ligne
         self.log_view.moveCursor(QTextCursor.End)
         self.log_view.ensureCursorVisible()
-
 
 
     def set_busy(self, busy: bool) -> None:
@@ -329,9 +328,9 @@ class MainWindow(QMainWindow):
         elif step_name == "potrace":
             self.preview_svg.show_svg(path_str)
         elif step_name == "ilda":
-            # On affiche les SVG utilisés pour construire le ILDA,
-            # c'est une approximation visuelle mais suffisante.
-            self.preview_ilda.show_svg(path_str)
+            # Désormais on reçoit un PNG généré depuis le fichier .ild
+            self.preview_ilda.show_image(path_str)
+
 
     # ------------------------------------------------------------------
     # Callbacks UI
@@ -450,12 +449,19 @@ class MainWindow(QMainWindow):
         first_svg = self._find_first_frame(svg_dir, pattern="frame_*.svg")
 
         if first_svg:
-            self.preview_ilda.show_svg(str(first_svg))
-            self.log(f"[Preview] ILDA approx à partir de : {first_svg}")
+            self.preview_svg.show_svg(str(first_svg))
+            self.log(f"[Preview] SVG : {first_svg}")
         else:
-            self.log(
-                "[Preview] Aucune frame SVG trouvée pour la prévisualisation ILDA."
-            )
+            self.log("[Preview] Aucune frame SVG trouvée pour la preview.")
+
+        # Preview ILDA seulement si une image a déjà été générée
+        ilda_preview_png = project_root / "preview" / "ilda_preview.png"
+        if ilda_preview_png.exists():
+            self.preview_ilda.show_image(str(ilda_preview_png))
+            self.log(f"[Preview] ILDA à partir de : {ilda_preview_png}")
+        else:
+            self.log("[Preview] Pas encore de preview ILDA (exportez d'abord).")
+
 
     def on_preview_frame(self) -> None:
         """

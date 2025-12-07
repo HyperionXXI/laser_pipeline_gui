@@ -6,102 +6,94 @@ from typing import Optional
 
 from core.config import PROJECTS_ROOT
 from core.step_ilda import export_project_to_ilda
+from core.ilda_preview import render_ilda_preview
 from .base import FrameProgress, StepResult, ProgressCallback, CancelCallback
 
 
 def run_ilda_step(
     project: str,
     fit_axis: str = "max",
-    fill_ratio: float = 0.98,  # cf. 3.2
-    min_rel_size: float = 0.003,  # au lieu de 0.01
-    remove_outer_frame: bool = True,
-    frame_margin_rel: float = 0.02,
+    fill_ratio: float = 0.95,
+    min_rel_size: float = 0.01,
     progress_cb: Optional[ProgressCallback] = None,
     cancel_cb: Optional[CancelCallback] = None,
 ) -> StepResult:
     """
-    Step pipeline : SVG -> ILDA pour un projet donné.
-
-    - SVG attendus dans projects/<project>/svg/frame_*.svg
-    - Fichier .ild généré dans projects/<project>/ilda/<project>.ild
+    Step pipeline ILDA : SVG -> .ild + PNG de prévisualisation.
     """
     step_name = "ilda"
-
     project_root = PROJECTS_ROOT / project
     svg_dir = project_root / "svg"
+
     svg_files = sorted(svg_dir.glob("frame_*.svg"))
 
+    # Progress initial (si on a déjà au moins un SVG)
     if progress_cb is not None:
+        first_svg = svg_files[0] if svg_files else None
         progress_cb(
             FrameProgress(
                 step_name=step_name,
-                message="Démarrage export ILDA…",
+                message="[ilda] Préparation export ILDA…",
                 frame_index=0,
                 total_frames=100,
-                frame_path=svg_files[0] if svg_files else None,
+                frame_path=first_svg,
             )
         )
 
     def _check_cancel() -> bool:
         return cancel_cb is not None and cancel_cb()
 
-    def _report_progress(p: int) -> None:
+    def _report_progress(percent: int) -> None:
         if progress_cb is None:
             return
-
-        # Choix d'un SVG "proche" du pourcentage courant, pour la preview
-        frame_path = None
-        if svg_files:
-            idx = max(0, min(len(svg_files) - 1, int(p * len(svg_files) / 100)))
-            frame_path = svg_files[idx]
-
+        # On mappe directement sur 0..100
         progress_cb(
             FrameProgress(
                 step_name=step_name,
-                message=f"Export ILDA… {p}%",
-                frame_index=p,
+                message=f"[ilda] Export ILDA… {percent} %",
+                frame_index=percent,
                 total_frames=100,
-                frame_path=frame_path,
+                frame_path=None,
             )
         )
 
     try:
-        out_path: Path = export_project_to_ilda(
+        out_path = export_project_to_ilda(
             project_name=project,
             fit_axis=fit_axis,
             fill_ratio=fill_ratio,
             min_rel_size=min_rel_size,
-            remove_outer_frame=remove_outer_frame,
-            frame_margin_rel=frame_margin_rel,
             check_cancel=_check_cancel,
             report_progress=_report_progress,
         )
     except Exception as e:
-        msg = f"Erreur export ILDA : {e}"
-        if progress_cb is not None:
-            progress_cb(
-                FrameProgress(
-                    step_name=step_name,
-                    message=msg,
-                    frame_index=None,
-                    total_frames=None,
-                    frame_path=None,
-                )
-            )
         return StepResult(
             success=False,
-            message=msg,
+            message=f"Erreur lors de l'export ILDA : {e}",
             output_dir=None,
         )
+
+    # ------------------------------------------------------------------
+    # Génération de la preview PNG à partir du .ild
+    # ------------------------------------------------------------------
+    preview_dir = project_root / "preview"
+    preview_png = preview_dir / "ilda_preview.png"
+    preview_path: Optional[Path] = None
+
+    try:
+        preview_path = render_ilda_preview(out_path, preview_png)
+    except Exception:
+        # On ne casse pas le step pour un souci de preview
+        preview_path = None
 
     if progress_cb is not None:
         progress_cb(
             FrameProgress(
                 step_name=step_name,
-                message=f"Export ILDA terminé : {out_path.name}",
+                message=f"[ilda] Export ILDA terminé : {out_path.name}",
                 frame_index=100,
                 total_frames=100,
-                frame_path=svg_files[-1] if svg_files else None,
+                frame_path=preview_path,
             )
         )
 
