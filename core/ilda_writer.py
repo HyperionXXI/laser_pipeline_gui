@@ -1,3 +1,4 @@
+# core/ilda_writer.py
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -14,6 +15,7 @@ from typing import Iterable, List
 class IldaPoint:
     """
     Point ILDA en coordonnées 3D (Z=0 pour nous) avec blanking et index couleur.
+
     Les coordonnées sont attendues déjà normalisées dans l'intervalle
     [-32768, +32767] pour X/Y/Z.
     """
@@ -55,18 +57,18 @@ def _build_ilda_header_3d(
     Construit un header ILDA 3D indexed (format code = 0) de 32 octets.
 
     Spécification (ILDA Image Data Transfer Format) – "3D coordinate image".
-    Offsets (0-based) :
 
-      0–3   : "ILDA"
-      4–6   : 3 octets réservés = 0
-      7     : format code (0 = 3D indexed)
-      8–15  : nom de frame (8 chars, padded avec 0)
-      16–23 : nom société (8 chars, padded avec 0)
-      24–25 : nombre de points (uint16 big-endian)
-      26–27 : numéro de frame (uint16 big-endian)
-      28–29 : nombre total de frames dans le fichier (uint16 big-endian)
-      30    : numéro de projecteur (0–255)
-      31    : réservé = 0
+    Offsets (0-based) :
+        0–3  : "ILDA"
+        4–6  : 3 octets réservés = 0
+        7    : format code (0 = 3D indexed)
+        8–15 : nom de frame (8 chars, padded avec 0)
+        16–23: nom société (8 chars, padded avec 0)
+        24–25: nombre de points (uint16 big-endian)
+        26–27: numéro de frame (uint16 big-endian)
+        28–29: nombre total de frames dans le fichier (uint16 big-endian)
+        30   : numéro de projecteur (0–255)
+        31   : réservé = 0
     """
     header = bytearray(32)
 
@@ -110,12 +112,11 @@ def _pack_ilda_point(pt: IldaPoint, is_last: bool) -> bytes:
     Sérialise un point ILDA 3D indexed (format code 0).
 
     Layout (8 octets) :
-
-      X : int16 big-endian
-      Y : int16 big-endian
-      Z : int16 big-endian
-      Status : 1 octet (bit7 = last point, bit6 = blanked)
-      Color index : 1 octet
+        X : int16 big-endian
+        Y : int16 big-endian
+        Z : int16 big-endian
+        Status : 1 octet (bit7 = last point, bit6 = blanked)
+        Color index : 1 octet
     """
     # Status bits
     status = 0
@@ -125,10 +126,10 @@ def _pack_ilda_point(pt: IldaPoint, is_last: bool) -> bytes:
         status |= 0x40  # blanking
 
     return (
-        int(pt.x).to_bytes(2, "big", signed=True) +
-        int(pt.y).to_bytes(2, "big", signed=True) +
-        int(pt.z).to_bytes(2, "big", signed=True) +
-        bytes((status & 0xFF, int(pt.color_index) & 0xFF))
+        int(pt.x).to_bytes(2, "big", signed=True)
+        + int(pt.y).to_bytes(2, "big", signed=True)
+        + int(pt.z).to_bytes(2, "big", signed=True)
+        + bytes((status & 0xFF, int(pt.color_index) & 0xFF))
     )
 
 
@@ -141,7 +142,9 @@ def write_ilda_file(path: str | Path, frames: Iterable[IldaFrame]) -> Path:
     """
     Écrit un fichier ILDA contenant une ou plusieurs frames 3D indexed.
 
-    - `frames` : iterable d'IldaFrame (au moins une frame non vide).
+    - `frames` : iterable d'IldaFrame. Les frames **peuvent** être vides
+      (0 points) afin de conserver la synchronisation temporelle avec
+      d'autres médias (vidéo, audio, etc.).
     - Une frame EOF spéciale (0 points, num_points=0) est ajoutée en fin
       comme le recommande la spécification.
 
@@ -150,17 +153,8 @@ def write_ilda_file(path: str | Path, frames: Iterable[IldaFrame]) -> Path:
     out_path = Path(path)
     frames_list = list(frames)
 
-    # Filtre de sécurité : on enlève toutes les frames réellement vides
-    # (0 points). Si tout est vide, on écrit quand même un fichier mais
-    # il sera explicitement "empty".
-    non_empty_frames: list[IldaFrame] = []
-    for fr in frames_list:
-        pts = fr.ensure_points()
-        if pts:
-            non_empty_frames.append(fr)
-
-    if not non_empty_frames:
-        # Fichier ILDA minimal avec une seule frame EOF.
+    # Cas extrême : aucune frame fournie → on écrit uniquement une EOF.
+    if not frames_list:
         with out_path.open("wb") as f:
             eof = IldaFrame(name="", company="", points=[], projector=0)
             eof_header = _build_ilda_header_3d(
@@ -172,11 +166,11 @@ def write_ilda_file(path: str | Path, frames: Iterable[IldaFrame]) -> Path:
             f.write(eof_header)
         return out_path
 
-    total_frames = len(non_empty_frames)
+    total_frames = len(frames_list)
 
     with out_path.open("wb") as f:
         # Frames normales
-        for seq_no, frame in enumerate(non_empty_frames):
+        for seq_no, frame in enumerate(frames_list):
             pts = frame.ensure_points()
             num_points = len(pts)
 
@@ -226,8 +220,8 @@ def write_test_square(path: str | Path) -> Path:
     pts: list[IldaPoint] = []
 
     # On commence en blanked pour éviter un trait depuis l'origine
-    pts.append(IldaPoint(left, top, 0, blanked=True, color_index=1))       # start
-    pts.append(IldaPoint(right, top, 0, blanked=False, color_index=1))     # haut
+    pts.append(IldaPoint(left, top, 0, blanked=True, color_index=1))   # start
+    pts.append(IldaPoint(right, top, 0, blanked=False, color_index=1))  # haut
     pts.append(IldaPoint(right, bottom, 0, blanked=False, color_index=2))  # droite
     pts.append(IldaPoint(left, bottom, 0, blanked=False, color_index=3))   # bas
     pts.append(IldaPoint(left, top, 0, blanked=False, color_index=4))      # gauche
@@ -238,7 +232,6 @@ def write_test_square(path: str | Path) -> Path:
         points=pts,
         projector=0,
     )
-
     return write_ilda_file(out_path, [frame])
 
 

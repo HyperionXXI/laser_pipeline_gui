@@ -2,37 +2,36 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import List, Tuple, Optional
+from typing import List, Optional, Tuple
 
-from PIL import Image, ImageDraw  # pillow
+from PIL import Image, ImageDraw
+
 from .ilda_writer import IldaPoint, IldaFrame
 
 ILDA_MAGIC = b"ILDA"
 ILDA_HEADER_SIZE = 32
 
 
-# ----------------------------------------------------------------------
-# Lecture ILDA
-# ----------------------------------------------------------------------
+# ======================================================================
+# Lecture ILDA (format 0)
+# ======================================================================
 
 
 def _read_u16_be(data: bytes, offset: int) -> int:
-    """Lit un entier non signé 16 bits big-endian à partir de data[offset:]."""
     return int.from_bytes(data[offset:offset + 2], "big", signed=False)
 
 
 def _read_s16_be(data: bytes, offset: int) -> int:
-    """Lit un entier signé 16 bits big-endian à partir de data[offset:]."""
     return int.from_bytes(data[offset:offset + 2], "big", signed=True)
 
 
 def load_ilda_frames(path: Path, max_frames: Optional[int] = None) -> List[IldaFrame]:
     """
-    Lit un fichier ILDA (format 0 = 3D Indexed) et retourne une liste de IldaFrame.
+    Lit un fichier ILDA (format 0 = 3D indexed) et retourne une liste de IldaFrame.
 
-    - max_frames : si non nul, limite le nombre de frames lues.
-    - Les frames avec 0 points sont conservées (frames vides) afin de garder
-      la synchronisation avec la vidéo.
+    - `max_frames` : si non nul, limite le nombre de frames lues.
+    - Les frames avec 0 points sont conservées (frames vides) afin de
+      garder la synchronisation avec la vidéo.
     - La seule frame ignorée est la frame EOF finale (nom et société vides,
       num_points == 0), si elle est présente.
     """
@@ -46,21 +45,17 @@ def load_ilda_frames(path: Path, max_frames: Optional[int] = None) -> List[IldaF
 
             header = f.read(ILDA_HEADER_SIZE)
             if len(header) == 0:
-                # Fin de fichier
-                break
+                break  # fin de fichier
             if len(header) < ILDA_HEADER_SIZE:
                 raise RuntimeError("Header ILDA tronqué")
 
             if header[0:4] != ILDA_MAGIC:
-                raise RuntimeError("Fichier ILDA invalide (magic 'ILDA' absent)")
+                raise RuntimeError("Fichier ILDA invalide (magic manquant)")
 
-            # Spécification ILDA :
-            #   4..6 : 3 octets réservés (0)
-            #   7    : format code (0 = 3D indexed)
-            format_code = header[7]
+            format_code = int.from_bytes(header[4:8], "big", signed=False)
             if format_code != 0:
                 raise RuntimeError(
-                    f"Format ILDA non supporté : {format_code} (seul 0 est géré)"
+                    f"Format ILDA non supporté: {format_code} (seul 0 est géré)"
                 )
 
             num_points = _read_u16_be(header, 24)
@@ -109,9 +104,9 @@ def load_ilda_frames(path: Path, max_frames: Optional[int] = None) -> List[IldaF
     return frames
 
 
-# ----------------------------------------------------------------------
+# ======================================================================
 # Rendu en PNG
-# ----------------------------------------------------------------------
+# ======================================================================
 
 
 def _ilda_to_screen(
@@ -183,19 +178,51 @@ def render_ilda_preview(
     """
     Rendu pratique : charge le fichier ILDA et génère un PNG pour une frame.
 
-    - frame_index est 0-based (0 = première frame du fichier).
+    - `frame_index` est l'index de **frame vidéo** (0-based).
+      On cherche la frame ILDA dont le champ `name` vaut `Fxxxx` (xxxx
+      = frame_index sur 4 digits). Si elle n'existe pas, on prend la
+      frame dont le numéro dans `name` est le plus proche, ou la première
+      frame si aucune info exploitable n'est disponible.
     """
-    # On ne lit que les frames nécessaires pour atteindre frame_index.
-    max_frames = frame_index + 1 if frame_index >= 0 else None
-    frames = load_ilda_frames(ilda_path, max_frames=max_frames)
+    frames = load_ilda_frames(ilda_path, max_frames=None)
     if not frames:
         raise RuntimeError("Aucune frame ILDA lisible dans le fichier")
 
-    if frame_index < len(frames):
-        frame = frames[frame_index]
-    else:
-        # Sécurité : si l'index demandé dépasse ce qui a été lu,
-        # on se rabat sur la première frame.
-        frame = frames[0]
+    target_name = f"F{frame_index:04d}"
 
-    return render_ilda_frame_to_png(frame, out_png)
+    # 1) Recherche exacte sur le nom de frame
+    selected: Optional[IldaFrame] = None
+    for fr in frames:
+        if fr.name == target_name:
+            selected = fr
+            break
+
+    # 2) Si non trouvé, on cherche la frame "la plus proche"
+    if selected is None:
+        target_num = frame_index
+        best_frame: Optional[IldaFrame] = None
+        best_dist: Optional[int] = None
+
+        for fr in frames:
+            if not fr.name:
+                continue
+            # On tolère "F0123" ou "0123"
+            name = fr.name
+            if name[0] in ("F", "f"):
+                name = name[1:]
+            try:
+                num = int(name)
+            except ValueError:
+                continue
+
+            dist = abs(num - target_num)
+            if best_dist is None or dist < best_dist:
+                best_dist = dist
+                best_frame = fr
+
+        if best_frame is not None:
+            selected = best_frame
+        else:
+            selected = frames[0]
+
+    return render_ilda_frame_to_png(selected, out_png)
