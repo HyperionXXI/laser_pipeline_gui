@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QRectF
 from PySide6.QtGui import QPainter, QPixmap
 from PySide6.QtSvg import QSvgRenderer
 from PySide6.QtWidgets import QWidget
@@ -21,8 +21,7 @@ class RasterPreview(QWidget):
 
     def show_image(self, path: str | Path) -> None:
         """Charge et affiche une image raster à partir d'un chemin."""
-        pm = QPixmap(str(path))
-        self._pixmap = pm
+        self._pixmap = QPixmap(str(path))
         self.update()
 
     def paintEvent(self, event) -> None:  # type: ignore[override]
@@ -51,26 +50,22 @@ class SvgPreview(QWidget):
 
     - Fond noir (cohérent avec les traits blancs / colorés).
     - Rapport largeur/hauteur toujours respecté.
-    - Contenu centré et mis à l'échelle pour occuper au mieux la zone.
-    - Aucune logique de "zoom" maison : on laisse le viewBox du SVG
-      faire foi, ce qui évite les surprises et les déformations.
+    - Contenu centré et mis à l'échelle pour occuper au mieux la zone,
+      sans aucune déformation.
+
+    Aucun traitement lourd : la preview reste très légère et ne
+    ralentit pas Potrace / ILDA.
     """
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
 
         self._renderer = QSvgRenderer(self)
-        # Important : conserver le ratio du viewBox et centrer le rendu
-        self._renderer.setAspectRatioMode(Qt.KeepAspectRatio)
-
-        self._svg_path: str | None = None
         self.setMinimumSize(240, 180)
 
     def show_svg(self, path: str | Path) -> None:
         """Charge et affiche un SVG à partir d'un chemin."""
-        path_str = str(path)
-        self._svg_path = path_str
-        self._renderer.load(path_str)
+        self._renderer.load(str(path))
         self.update()
 
     def paintEvent(self, event) -> None:  # type: ignore[override]
@@ -82,8 +77,43 @@ class SvgPreview(QWidget):
         if not self._renderer.isValid():
             return
 
-        # Avec aspectRatioMode = KeepAspectRatio, QSvgRenderer :
-        # - centre le contenu,
-        # - le met à l'échelle au maximum dans "self.rect()",
-        # - en conservant le ratio du viewBox.
-        self._renderer.render(painter, self.rect())
+        view_box: QRectF = self._renderer.viewBoxF()
+        if view_box.isEmpty():
+            # Rendu brut si le SVG n'a pas de viewBox exploitable
+            self._renderer.render(painter)
+            return
+
+        vw = view_box.width()
+        vh = view_box.height()
+        if vw <= 0 or vh <= 0:
+            self._renderer.render(painter)
+            return
+
+        widget_w = self.width()
+        widget_h = self.height()
+        if widget_w <= 0 or widget_h <= 0:
+            return
+
+        aspect_view = vw / vh
+        aspect_widget = widget_w / widget_h
+
+        # On construit un rectangle cible avec le même ratio que la viewBox,
+        # puis on le centre dans le widget.
+        if aspect_widget > aspect_view:
+            # Widget plus "large" que la viewBox : bandes latérales
+            target_h = float(widget_h)
+            target_w = target_h * aspect_view
+            x = (widget_w - target_w) / 2.0
+            y = 0.0
+        else:
+            # Widget plus "haut" : bandes en haut/bas
+            target_w = float(widget_w)
+            target_h = target_w / aspect_view
+            x = 0.0
+            y = (widget_h - target_h) / 2.0
+
+        target_rect = QRectF(x, y, target_w, target_h)
+
+        # Comme target_rect et viewBox ont le même ratio, il n'y a
+        # aucune déformation : QSvgRenderer applique un scale uniforme.
+        self._renderer.render(painter, target_rect)
