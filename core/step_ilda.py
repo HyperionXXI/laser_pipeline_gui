@@ -387,104 +387,113 @@ def _is_closed_path(path: List[Tuple[float, float]], tol: float) -> bool:
 def _paths_to_ilda_points(
     paths: List[List[Tuple[float, float]]],
     bounds: Tuple[float, float, float, float],
-    min_rel_size: float = 0.01,
-    fill_ratio: float = 0.95,
-    fit_axis: str = "max",   # "max" (défaut), "x" ou "y"
-    remove_outer_frame: bool = True,
-    frame_margin_rel: float = 0.02,
+    *,
+    min_rel_size: float,
+    fill_ratio: float,
+    fit_axis: Literal["max", "x", "y"],
+    remove_outer_frame: bool = False,
+    frame_margin_rel: float = 0.0,
+    blank_move_points: int = 4,
 ) -> List[ILDAPoint]:
     """
-    Normalise des chemins (liste de listes de (x,y)) dans l'espace ILDA.
+    Convertit une liste de chemins 2D en points ILDA.
 
-    - bounding box commune fournie par 'bounds'
-    - Z = 0, couleur = blanc
-    - début de chaque sous-chemin en 'blanked=True'
-    - supprime les paths trop petits (lignes parasites)
-    - si remove_outer_frame=True, supprime un grand path fermé dont
-      la bounding box colle à la bounding box globale (cadre extérieur)
+    - `bounds` : (min_x, max_x, min_y, max_y) communs à toutes les frames.
+    - `min_rel_size` : filtre les très petits chemins (bruit).
+    - `fill_ratio` : fraction de la plage [-32767, +32767] utilisée.
+    - `fit_axis` : "max" (par défaut), "x" ou "y" pour le choix de l’axe de référence.
+    - `remove_outer_frame` : paramètre conservé pour compatibilité ; non utilisé ici.
+    - `frame_margin_rel` : idem, utilisé en amont lors du calcul du bounding box.
+    - `blank_move_points` : nombre de points blankés insérés pour les
+      déplacements entre chemins (limite les lignes parasites).
     """
     min_x, max_x, min_y, max_y = bounds
-    span_x = max_x - min_x or 1.0
-    span_y = max_y - min_y or 1.0
-    global_span = max(span_x, span_y)
+    span_x = max(max_x - min_x, 1e-9)
+    span_y = max(max_y - min_y, 1e-9)
 
+    # Étendue maximale que l'on souhaite utiliser dans l'espace ILDA
+    max_extent = 32767.0 * float(fill_ratio)
+
+    # Choix de l'axe de référence pour le scaling
     if fit_axis == "x":
-        base_span = span_x
+        span_ref = span_x
     elif fit_axis == "y":
-        base_span = span_y
-    else:
-        base_span = global_span
+        span_ref = span_y
+    else:  # "max"
+        span_ref = max(span_x, span_y)
 
-    scale = (32767 * fill_ratio) / base_span
-    cx = (min_x + max_x) / 2.0
-    cy = (min_y + max_y) / 2.0
+    if span_ref <= 0.0:
+        return []
 
-    result: List[ILDAPoint] = []
+    # ⚠️ Correction importante :
+    # On est centré autour du milieu, donc les extrémités sont à ±span_ref/2.
+    # Pour les mapper sur ±max_extent, il faut :
+    #   scale = max_extent / (span_ref / 2) = 2 * max_extent / span_ref
+    scale = (2.0 * max_extent) / span_ref
 
-    frame_tol = global_span * frame_margin_rel
+    x_center = (min_x + max_x) / 2.0
+    y_center = (min_y + max_y) / 2.0
+
+    def clamp16(v: int) -> int:
+        # Petits garde-fous pour rester dans la plage ILDA valide.
+        return max(-32767, min(32767, v))
+
+    def to_ilda_xy(x: float, y: float) -> Tuple[int, int]:
+        # Coordonnées centrées, inversion de l'axe Y pour correspondre à ILDA.
+        nx = int(round((x - x_center) * scale))
+        ny = int(round((y_center - y) * scale))
+        return clamp16(nx), clamp16(ny)
+
+    ilda_points: List[ILDAPoint] = []
+    prev_end_xy: Optional[Tuple[int, int]] = None
 
     for path in paths:
         if len(path) < 2:
             continue
 
-        xs = [x for x, _ in path]
-        ys = [y for _, y in path]
-        span_px = (max(xs) - min(xs)) or 0.0
-        span_py = (max(ys) - min(ys)) or 0.0
-        path_span = max(span_px, span_py)
-
-        # 1) Option : suppression du cadre extérieur
-        if remove_outer_frame and len(path) >= 4 and path_span > 0:
-            # grand path fermé dont la bbox colle à la bbox globale
-            if _is_closed_path(path, tol=frame_tol):
-                near_left   = abs(min(xs) - min_x) <= frame_tol
-                near_right  = abs(max(xs) - max_x) <= frame_tol
-                near_bottom = abs(min(ys) - min_y) <= frame_tol
-                near_top    = abs(max(ys) - max_y) <= frame_tol
-
-                # Il "encadre" pratiquement toute la scène
-                if near_left and near_right and near_bottom and near_top:
-                    # On considère que c'est un cadre décoratif → on l'ignore
-                    continue
-
-        # 2) Filtre anti-poussière : paths trop petits
-        if path_span < global_span * min_rel_size:
+        # Filtre les chemins très petits (bruit) en fonction du bounding global.
+        xs = [p[0] for p in path]
+        ys = [p[1] for p in path]
+        if (
+            (max(xs) - min(xs) < span_x * min_rel_size)
+            and (max(ys) - min(ys) < span_y * min_rel_size)
+        ):
             continue
 
-        first = True
-        for x, y in path:
-            nx = int(round((x - cx) * scale))
-            ny = int(round((cy - y) * scale))  # inversion Y
+        # Premier point du chemin en coordonnées ILDA
+        start_x, start_y = to_ilda_xy(*path[0])
 
-            result.append(
-                ILDAPoint(
-                    x=nx,
-                    y=ny,
-                    z=0,
-                    blanked=first,
-                    color_index=255,
+        # Si on vient d'un autre chemin, on insère des points de déplacement blankés
+        # entre la fin précédente et le début du nouveau chemin.
+        if prev_end_xy is not None and blank_move_points > 0:
+            px, py = prev_end_xy
+            for i in range(1, blank_move_points + 1):
+                t = i / (blank_move_points + 1)
+                ix = int(round(px + t * (start_x - px)))
+                iy = int(round(py + t * (start_y - py)))
+                ix, iy = clamp16(ix), clamp16(iy)
+                ilda_points.append(
+                    ILDAPoint(x=ix, y=iy, z=0, blanked=True, color_index=255)
                 )
+
+        # Points du chemin lui-même
+        for idx, (x, y) in enumerate(path):
+            if idx == 0:
+                nx, ny = start_x, start_y
+            else:
+                nx, ny = to_ilda_xy(x, y)
+
+            # Premier point du chemin : blanked=True (on "pose" le faisceau)
+            blanked = idx == 0
+            ilda_points.append(
+                ILDAPoint(x=nx, y=ny, z=0, blanked=blanked, color_index=255)
             )
-            first = False
 
-    return result
+        # Mémorise la fin de ce chemin pour le prochain déplacement blanké
+        prev_end_xy = to_ilda_xy(*path[-1])
 
+    return ilda_points
 
-def svg_to_points(svg_path: Path) -> List[ILDAPoint]:
-    """
-    API simple : convertit un fichier SVG isolé en liste de ILDAPoint.
-    Utilise la bounding box de CE seul fichier pour la normalisation.
-    (Sans suppression de cadre global, car il n'y en a pas sur un seul fichier.)
-    """
-    paths = _load_svg_paths(Path(svg_path))
-    if not paths:
-        return []
-    bounds = _compute_bounds([paths])
-    return _paths_to_ilda_points(
-        paths,
-        bounds,
-        remove_outer_frame=False,  # sur un seul fichier, on ne peut pas savoir
-    )
 
 
 # ======================================================================
