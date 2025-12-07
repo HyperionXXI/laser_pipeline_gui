@@ -301,92 +301,135 @@ def _compute_bounds(
 
     Retourne un tuple :
 
-    - bounds : (min_x, max_x, min_y, max_y)
-    - frame_paths : ensemble de couples (frame_index, path_index) à
-      considérer comme "cadres" et à NE PAS exporter en ILDA.
+        (bounds, frame_paths)
+
+    - ``bounds`` est (min_x, max_x, min_y, max_y) sur le contenu utile.
+    - ``frame_paths`` est l'ensemble des couples (frame_index, path_index)
+      correspondant aux chemins considérés comme "cadres" et donc exclus.
     """
-    xs_all: List[float] = []
-    ys_all: List[float] = []
 
-    for paths in frames_paths:
-        for p in paths:
-            for x, y in p:
-                xs_all.append(x)
-                ys_all.append(y)
+    # ------------------------------------------------------------------
+    # 1) BBOX GLOBALE (tous chemins, toutes frames)
+    # ------------------------------------------------------------------
+    all_x: list[float] = []
+    all_y: list[float] = []
 
-    if not xs_all:
-        raise RuntimeError("Aucun point vectoriel trouvé dans les SVG.")
+    for frame in frames_paths:
+        for path in frame:
+            for x, y in path:
+                all_x.append(x)
+                all_y.append(y)
 
-    min_x = min(xs_all)
-    max_x = max(xs_all)
-    min_y = min(ys_all)
-    max_y = max(ys_all)
+    if not all_x:
+        # Pas de contenu du tout.
+        return (0.0, 0.0, 0.0, 0.0), set()
 
-    # Cas simple : pas de tentative de suppression de cadre
+    min_x = min(all_x)
+    max_x = max(all_x)
+    min_y = min(all_y)
+    max_y = max(all_y)
+
+    span_x = max(max_x - min_x, 1e-9)
+    span_y = max(max_y - min_y, 1e-9)
+    global_span = max(span_x, span_y)
+    global_area = span_x * span_y
+
     if not remove_outer_frame:
+        # On ne touche à rien : bbox globale et aucun chemin exclu.
         return (min_x, max_x, min_y, max_y), set()
 
-    span_x = max_x - min_x or 1.0
-    span_y = max_y - min_y or 1.0
-    global_span = max(span_x, span_y)
-    frame_tol = global_span * frame_margin_rel
-    global_area = span_x * span_y or 1.0
-
-    # 1) Détection des paths "cadre"
     frame_paths: set[tuple[int, int]] = set()
 
-    for fi, paths in enumerate(frames_paths):
-        for pi, path in enumerate(paths):
-            if len(path) < 4:
+    margin_x = span_x * frame_margin_rel
+    margin_y = span_y * frame_margin_rel
+    tol_closed = global_span * 1e-3  # tolérance de fermeture relative
+
+    # ------------------------------------------------------------------
+    # 2) CLASSEMENT DES CHEMINS "CADRES"
+    # ------------------------------------------------------------------
+    for fi, frame in enumerate(frames_paths):
+        for pi, path in enumerate(frame):
+            if len(path) < 3:
                 continue
 
-            xs = [x for x, _ in path]
-            ys = [y for _, y in path]
-            span_px = (max(xs) - min(xs)) or 0.0
-            span_py = (max(ys) - min(ys)) or 0.0
-            path_span = max(span_px, span_py)
+            xs = [p[0] for p in path]
+            ys = [p[1] for p in path]
+            px_min, px_max = min(xs), max(xs)
+            py_min, py_max = min(ys), max(ys)
+            width = px_max - px_min
+            height = py_max - py_min
+            path_span = max(width, height)
 
-            # Trop petit pour être un cadre
-            if path_span < global_span * min_rel_size:
+            # Trop petit pour être un cadre → on ignore.
+            if path_span < global_span * float(min_rel_size):
                 continue
 
-            if not _is_closed_path(path, tol=frame_tol):
+            if not _is_closed_path(path, tol=tol_closed):
+                # Un cadre est forcément fermé.
                 continue
 
-            path_area = span_px * span_py
+            # Étendue relative du path par rapport à la bbox globale.
+            rel_x = width / span_x if span_x > 0 else 0.0
+            rel_y = height / span_y if span_y > 0 else 0.0
 
-            near_left = abs(min(xs) - min_x) <= frame_tol
-            near_right = abs(max(xs) - max_x) <= frame_tol
-            near_bottom = abs(min(ys) - min_y) <= frame_tol
-            near_top = abs(max(ys) - max_y) <= frame_tol
-            touches = sum((near_left, near_right, near_bottom, near_top))
+            # ---- Cas 1 : "vrai cadre plein écran" très agressif ----
+            if rel_x >= 0.95 and rel_y >= 0.95:
+                frame_paths.add((fi, pi))
+                continue
 
-            # Il couvre la majeure partie de la scène et touche au moins
-            # trois bords : on le considère comme un cadre.
-            if touches >= 3 and path_area >= global_area * 0.5:
+            # ---- Cas 2 : cadre large touchant plusieurs bords ----
+            touches = 0
+            if abs(px_min - min_x) <= margin_x:
+                touches += 1
+            if abs(px_max - max_x) <= margin_x:
+                touches += 1
+            if abs(py_min - min_y) <= margin_y:
+                touches += 1
+            if abs(py_max - max_y) <= margin_y:
+                touches += 1
+
+            # Aire via la formule du "shoelace" (chemin fermé).
+            path_area = 0.0
+            for (x0, y0), (x1, y1) in zip(path, path[1:] + path[:1]):
+                path_area += x0 * y1 - x1 * y0
+            path_area = abs(path_area) * 0.5
+
+            # On accepte comme cadre :
+            #  - ce qui touche au moins 3 bords
+            #  - ET occupe au moins 20 % de l'aire globale.
+            if global_area > 0 and touches >= 3 and path_area >= global_area * 0.2:
                 frame_paths.add((fi, pi))
 
-    # 2) Re-calcul de la bounding box en ignorant les cadres trouvés
+    # ------------------------------------------------------------------
+    # 3) RE-CALCUL DE LA BBOX EN EXCLUANT LES CADRES
+    # ------------------------------------------------------------------
     if not frame_paths:
+        # Rien n'a été identifié comme cadre : on garde la bbox globale.
         return (min_x, max_x, min_y, max_y), frame_paths
 
-    xs: List[float] = []
-    ys: List[float] = []
+    xs_useful: list[float] = []
+    ys_useful: list[float] = []
 
-    for fi, paths in enumerate(frames_paths):
-        for pi, p in enumerate(paths):
+    for fi, frame in enumerate(frames_paths):
+        for pi, path in enumerate(frame):
             if (fi, pi) in frame_paths:
                 continue
-            for x, y in p:
-                xs.append(x)
-                ys.append(y)
+            for x, y in path:
+                xs_useful.append(x)
+                ys_useful.append(y)
 
-    # Si tout a été filtré par erreur, on revient à la bbox globale
-    if not xs:
+    # Si tout a été filtré (cas pathologique), on revient à la bbox globale.
+    if not xs_useful:
         frame_paths.clear()
         return (min_x, max_x, min_y, max_y), frame_paths
 
-    return (min(xs), max(xs), min(ys), max(ys)), frame_paths
+    return (
+        min(xs_useful),
+        max(xs_useful),
+        min(ys_useful),
+        max(ys_useful),
+    ), frame_paths
+
 
 
 def _paths_to_ilda_points(
@@ -589,7 +632,14 @@ def export_project_to_ilda(
             frame_margin_rel=frame_margin_rel,
         )
 
+        # 🔹 NOUVEAU : si aucun point utile, on saute la frame
+        if not ilda_points:
+            if report_progress is not None and total > 0:
+                report_progress(int((idx + 1) * 100 / total))
+            continue
+
         frame = ILDAFrame(
+            # On garde l’index réel dans le nom, même si certaines frames sont sautées
             name=f"F{idx:04d}",
             company="LPIP",
             points=ilda_points,
@@ -599,6 +649,7 @@ def export_project_to_ilda(
 
         if report_progress is not None and total > 0:
             report_progress(int((idx + 1) * 100 / total))
+
 
     out_path = ilda_dir / f"{project_name}.ild"
     write_ilda_file(out_path, frames)
