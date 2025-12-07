@@ -16,18 +16,23 @@ def _run_potrace_single(bmp_path: Path, svg_path: Path) -> None:
 
     cmd = [
         str(POTRACE_PATH),
-        "-s",              # sortie SVG
-        "-o",
-        str(svg_path),
+        "-s",            # sortie SVG
+        "-o", str(svg_path),
         str(bmp_path),
     ]
+
     subprocess.run(cmd, check=True)
 
 
 def _postprocess_svg(svg_path: Path) -> None:
     """
-    Post-traitement du SVG généré par Potrace afin de forcer
-    un style adapté au laser (trait blanc, sans remplissage).
+    Post-traitement du SVG généré par Potrace afin de forcer un style
+    adapté au laser et lisible dans la prévisualisation :
+
+    - pas de remplissage (fill="none")
+    - trait blanc (stroke="#FFFFFF")
+    - trait suffisamment épais pour être visible (stroke-width="3")
+    - jonctions / extrémités arrondies
     """
     import xml.etree.ElementTree as ET
 
@@ -40,14 +45,15 @@ def _postprocess_svg(svg_path: Path) -> None:
 
     for elem in root.iter():
         if is_tag(elem, "path"):
-            style = elem.get("style", "")
-            # On enlève les styles existants basés sur fill
-            # et on force stroke blanc, sans remplissage
+            # On force un style simple et compatible laser,
+            # les attributs visuels NE sont PAS utilisés pour l'ILDA.
             elem.set("fill", "none")
             elem.set("stroke", "#FFFFFF")
-            elem.set("stroke-width", "1")
+            elem.set("stroke-width", "3")  # ← plus épais pour la prévisualisation
             elem.set("stroke-linejoin", "round")
             elem.set("stroke-linecap", "round")
+
+            # On supprime l'attribut 'style' si présent pour éviter les conflits
             if "style" in elem.attrib:
                 del elem.attrib["style"]
 
@@ -68,7 +74,8 @@ def bitmap_to_svg_folder(
     - svg_dir : dossier de sortie des SVG
     - max_frames : limite optionnelle du nombre de frames
     - frame_callback(idx, total, svg_path) : appelé pour chaque frame générée
-    - cancel_cb() -> bool : si True, la conversion est interrompue via RuntimeError
+    - cancel_cb() -> bool : si True, la conversion est interrompue
+      via RuntimeError
     """
     bmp_dir_p = Path(bmp_dir)
     svg_dir_p = Path(svg_dir)
@@ -87,6 +94,7 @@ def bitmap_to_svg_folder(
             raise RuntimeError("Vectorisation Potrace annulée par l'utilisateur.")
 
         svg_path = svg_dir_p / (bmp_path.stem + ".svg")
+
         _run_potrace_single(bmp_path, svg_path)
         _postprocess_svg(svg_path)
 
