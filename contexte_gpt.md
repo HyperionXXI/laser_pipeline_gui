@@ -1,527 +1,395 @@
-Voici une version entièrement mise à jour de `contexte_gpt.md`, qui remplace l’ancienne.
+# Contexte GPT – Projet `laser_pipeline_gui`
+Commit de référence : `f73209b736854e845a6d07d311a7618a0212cae4`
+Repo : https://github.com/HyperionXXI/laser_pipeline_gui
 
+## 1. Objectif du projet
 
+Application Python avec GUI (PyQt5) pour convertir une **vidéo** en **fichier ILDA (.ild)** via un pipeline en 4 étapes :
 
----
+1. FFmpeg : extraction des frames PNG.
+2. Bitmap : seuillage → BMP binaires adaptés à Potrace.
+3. Potrace : vectorisation BMP → SVG.
+4. ILDA : conversion des SVG en un fichier ILDA unique (une frame ILDA par frame vidéo).
 
-# Contexte GPT – Projet *Laser Pipeline GUI*
+Cas d’usage principaux :
+- Animation **La Linea** : garder uniquement le trait principal (personnage), supprimer le cadre et les parasites.
+- À terme : contenus plus complexes (ex. Star Wars Arcade).
 
-Ce document sert de **mémoire stable** pour les futures conversations avec ChatGPT
-autour du projet `laser_pipeline_gui`.
-Il décrit l’architecture actuelle, les invariants à respecter et les pistes
-d’évolution déjà identifiées.
-
-Ligne directrice demandée par Florian :
-
-> code **générique**, **portable**, **robuste**, **orienté objets** et pensé **intelligemment**.
-
----
-
-## A. Vue d’ensemble et objectifs
-
-### A.1 But du projet
-
-Le projet **Laser Pipeline GUI** est une application expérimentale en Python qui
-sert de **banc d’essai** pour transformer une vidéo classique en **animation
-laser au format ILDA** (`.ild`).
-
-La chaîne de traitement est découpée en **quatre étapes indépendantes et
-réutilisables** :
-
-1. **FFmpeg → PNG**
-   Extraction de frames PNG à partir d’un fichier vidéo (MP4, MOV, AVI…).
-
-2. **ImageMagick → BMP**
-   Prétraitement des PNG en BMP noir/blanc (binarisation, éventuellement
-   *thinning*) pour obtenir un trait exploitable par la vectorisation.
-
-3. **Potrace → SVG**
-   Vectorisation des BMP en fichiers SVG (chemins vectoriels).
-
-4. **Export ILDA → .ild**
-   Conversion de la séquence de SVG en un fichier ILDA destiné à des
-   logiciels de show laser (LaserOS, LaserCube, etc.).
-
-Objectifs principaux :
-
-* disposer d’un **pipeline modulaire** réutilisable en ligne de commande ;
-* offrir une **interface graphique PySide6** pour piloter ce pipeline ;
-* gérer :
-
-  * la journalisation (logs horodatés),
-  * la progression,
-  * l’annulation propre d’étapes longues,
-  * des **prévisualisations** aux différents stades (PNG, BMP, SVG, ILDA).
-
-Cas d’usage visés :
-
-* animations filaires / vectorielles (ex. *La Linea*) ;
-* générique pour d’autres vidéos stylisées (jeux d’arcade, etc.) ;
-* à terme : gestion d’épaisseur de trait, stabilité, plein écran, couleurs,
-  et éventuellement synchronisation approximative avec le son.
+Contraintes :
+- Code générique, portable, robuste.
+- Architecture claire et rejouable.
+- Un projet = un sous-dossier dans `projects/`.
 
 ---
 
-## B. Architecture globale
+## 2. Structure générale du dépôt
 
-L’architecture est organisée en deux couches principales : **core** (métier) et
-**GUI** (Qt).
+- `gui_main.py` : point d’entrée, lance la GUI.
+- `gui/`
+  - `main_window.py` : classe `MainWindow`, gestion de l’UI.
+  - `pipeline_controller.py` : orchestration des steps pipeline + annulation.
+- `core/`
+  - `config.py` : chemins de base, notamment `PROJECTS_ROOT = Path("projects")`.
+  - `ilda_writer.py` : structures ILDA + écriture fichiers `.ild`.
+  - `ilda_preview.py` : lecture ILDA + rendu PNG pour la prévisualisation.
+  - `step_ilda.py` : conversion SVG → ILDA.
+  - `pipeline/`
+    - `ffmpeg_step.py` : extraction vidéo → PNG.
+    - `bitmap_step.py` : PNG → BMP (seuil).
+    - `potrace_step.py` : BMP → SVG (appel externe Potrace).
+    - `ilda_step.py` : wrapper autour de `export_project_to_ilda`.
 
-### B.1 Couche core (`core/`)
+Arborescence d’un projet typique (`projet_demo`) :
 
-Logique métier **indépendante de Qt**.
-
-#### B.1.1 Configuration des outils externes (`config.py`)
-
-`config.py` résout les chemins vers les exécutables externes :
-
-* `FFMPEG_PATH`
-* `POTRACE_PATH`
-* `MAGICK_PATH`
-* `PROJECTS_ROOT`
-
-Priorité de résolution :
-
-1. variables d’environnement (si définies) :
-
-   * `LPIP_FFMPEG`
-   * `LPIP_POTRACE`
-   * `LPIP_MAGICK`
-   * `LPIP_PROJECTS_ROOT`
-2. binaire trouvé dans le `PATH` via `shutil.which` ;
-3. chemins par défaut raisonnables (Windows / Unix) pour rester compatible
-   avec la machine de développement actuelle.
-
-Les outils restent conceptuellement **externes** :
-on peut les livrer avec le repo, mais leur utilisation passe toujours
-par ces mécanismes (jamais de chemin “magique” en dur ailleurs).
-
-#### B.1.2 Étapes métier unitaires (`step_*.py`)
-
-* `step_ffmpeg.py`
-  Extraction des frames PNG à partir de la vidéo source.
-
-* `step_bitmap.py`
-  Conversion des PNG en BMP noir/blanc avec paramètres :
-
-  * `threshold` (%),
-  * `use_thinning` (bool),
-  * `max_frames` (`int` ou `None` pour toutes les frames).
-
-* `step_potrace.py`
-  Vectorisation des BMP en SVG via Potrace.
-  Post-traitement typique :
-
-  * forcer un `stroke` blanc,
-  * `fill="none"`,
-  * suppression éventuelle de styles parasites.
-
-* `step_ilda.py`
-  Conversion de la séquence de SVG en frames ILDA :
-
-  * lecture des SVG et extraction des chemins (`paths`) ;
-  * calcul d’une **bounding box globale** sur l’ensemble des SVG ;
-  * normalisation dans l’espace ILDA `[-32768 .. +32767]` avec un
-    `fill_ratio` (< 1 pour éviter le clipping) ;
-  * possibilité de laisser une petite marge contrôlée par un paramètre
-    de type `frame_margin_rel` (actuellement assez conservateur → marge
-    visible ; objectif futur : permettre un remplissage plus agressif) ;
-  * filtrage des petits chemins (anti “poussière”) via `min_rel_size` ;
-  * gestion du **blanking** :
-
-    * premier point de chaque sous-chemin en `blanked=True`,
-    * points suivants en `blanked=False`.
-
-  Des heuristiques sont en place (et encore perfectibles) pour tenter de
-  supprimer le **cadre extérieur** généré par Potrace lorsque celui-ci
-  englobe presque toute l’image.
-
-* `ilda_writer.py`
-  Écriture bas niveau des fichiers `.ild` :
-
-  * en-têtes ILDA,
-  * frames,
-  * points (coordonnées X/Y, couleur, drapeau `blanked`, etc.).
-
-* `ilda_preview.py`
-  Outils pour convertir une frame ILDA en segments 2D, puis en image
-  (via Pillow). Sert de base pour une future prévisualisation ILDA
-  réellement basée sur le fichier `.ild` (et pas seulement sur les SVG).
-
-#### B.1.3 Pipeline générique (`core/pipeline/`)
-
-* `base.py`
-  Définit les types génériques utilisés par toutes les étapes :
-
-  * `FrameProgress`
-    Représente l’avancement d’une frame individuelle pendant un step.
-
-    Champs stables à conserver :
-
-    * `frame_index: int | None`
-    * `total_frames: int | None`
-    * `frame_path: Path | None` (chemin vers le fichier généré, utilisé
-      pour les prévisualisations)
-    * éventuellement `step_percent: int | None`.
-
-  * `StepResult`
-    Résultat global d’un step.
-
-    Champs stables :
-
-    * `success: bool`
-    * `message: str`
-    * `output_dir: Path | None`
-    * d’autres champs spécifiques peuvent être ajoutés sans casser l’API
-      (par ex. `last_frame_path`).
-
-  * `StepCallbacks`
-    Ensemble de callbacks fournis par la couche supérieure (GUI ou CLI) :
-
-    * `log: Callable[[str], None] | None`
-    * `progress: Callable[[int], None] | None` (0–100 global)
-    * `frame_progress: Callable[[FrameProgress], None] | None`
-    * `check_cancel: Callable[[], bool] | None`
-      (permet l’annulation propre au sein des boucles).
-
-  👉 **Important :**
-  Le code de `core/pipeline/*.py` ne dépend pas de Qt.
-  Il ne voit que ces callbacks Python.
-
-* `ffmpeg_step.py`, `bitmap_step.py`, `potrace_step.py`, `ilda_step.py`
-  Wrappers de haut niveau qui :
-
-  * appellent les fonctions de `step_*.py` correspondantes ;
-  * traduisent leur progression en `FrameProgress` ;
-  * gèrent l’annulation via `check_cancel` ;
-  * retournent un `StepResult` cohérent.
+projects/
+  projet_demo/
+    frames/   # PNG FFmpeg
+    bmp/      # BMP seuillés
+    svg/      # SVG Potrace
+    ilda/     # Fichiers .ild
+    preview/  # PNG pour prévisualisation ILDA
 
 ---
 
-### B.2 Couche GUI (`gui/`)
+## 3. GUI : `gui_main.py`, `gui/main_window.py`, `gui/pipeline_controller.py`
 
-Interface utilisateur basée sur PySide6.
+### 3.1. `gui_main.py`
 
-#### B.2.1 Fenêtre principale (`main_window.py`)
+- Fait : `from gui.main_window import run` puis `run()`.
 
-Structure en trois zones :
+### 3.2. `MainWindow` (`gui/main_window.py`)
 
-1. **Paramètres généraux**
+Interface :
+- Sélection vidéo (chemin).
+- Nom de projet.
+- FPS.
+- Boutons :
+  - FFmpeg, Bitmap, Potrace, ILDA, Pipeline complet.
+  - **Annuler la tâche en cours**.
+- Zone de log (affiche les messages `[FFmpeg]`, `[BMP]`, `[Potrace]`, `[ILDA]`, `[Preview]`…).
+- Zone de prévisualisation avec 4 colonnes :
+  1. PNG (frame vidéo).
+  2. BMP (après seuil).
+  3. SVG (après Potrace).
+  4. ILDA (rendu PNG d’une frame du `.ild`).
 
-   * chemin vidéo (ligne d’édition + bouton “Parcourir…”),
-   * nom du projet (ex. `projet_demo`),
-   * FPS (spin box),
-   * bouton **“Tester les paramètres”** qui logue les valeurs courantes.
+Callback important (restauré) :
 
-2. **Pipeline vidéo → vecteur**
+```python
+def on_cancel_task(self) -> None:
+    self.btn_cancel_task.setEnabled(False)
+    self.pipeline.cancel_current_step()
+```
 
-   * contrôle commun “Frame” (`QSpinBox`) + bouton “Prévisualiser frame”
-     qui affiche la frame demandée dans les quatre previews (si elle existe) ;
+### 3.3. `PipelineController` (`gui/pipeline_controller.py`)
 
-   * barre de progression globale + bouton “Annuler la tâche en cours” ;
-
-   * quatre colonnes, chacune avec :
-
-     1. **FFmpeg → PNG (frames)**
-
-        * bouton « Lancer FFmpeg » ;
-        * prévisualisation PNG (`RasterPreview`).
-
-     2. **Bitmap (ImageMagick)**
-
-        * paramètres :
-
-          * seuil (%),
-          * *thinning* (bool),
-          * max frames (0 = toutes) ;
-        * bouton « Lancer Bitmap » ;
-        * prévisualisation BMP (`RasterPreview`).
-
-     3. **Vectorisation (Potrace)**
-
-        * bouton « Lancer Potrace » ;
-        * prévisualisation SVG (`SvgPreview`), sans distorsion.
-
-     4. **ILDA (export)**
-
-        * bouton « Exporter ILDA » ;
-        * prévisualisation ILDA actuellement basée sur un SVG
-          (approximation visuelle de la première frame).
-
-   * La **progress bar** :
-
-     * passe en mode indéterminé quand `total_frames` est inconnu ;
-     * sinon, quand `FrameProgress.total_frames` est renseigné,
-       affiche un pourcentage calculé à partir de `frame_index`.
-
-3. **Zone de log**
-
-   * `QTextEdit` en lecture seule ;
-   * chaque message est préfixé par un **timestamp** `[HH:MM:SS]` ;
-   * auto-scroll vers la dernière ligne à chaque ajout ;
-   * utilisé par la GUI et par les steps (via les callbacks `log`).
-
-#### B.2.2 Contrôleur de pipeline (`pipeline_controller.py`)
-
-Objet central qui encapsule les threads et fait le pont Qt ↔ core.
-
-* crée un `QThread` par step ;
-
-* y place un worker qui appelle `run_ffmpeg_step`, `run_bitmap_step`,
-  `run_potrace_step` ou `run_ilda_step` ;
-
-* relaye les callbacks core → signaux Qt :
-
-  * `step_started(step_name: str)`
-  * `step_finished(step_name: str, result: StepResult)`
-  * `step_error(step_name: str, message: str)`
-  * `step_progress(step_name: str, payload: FrameProgress)`
-
-* détruit proprement le thread après exécution ou annulation.
-
-API publique exposée à `MainWindow` :
-
-* `start_ffmpeg(video_path, project, fps)`
-* `start_bitmap(project, threshold, use_thinning, max_frames)`
-* `start_potrace(project)`
-* `start_ilda(project)`
-* `cancel_current_step()`.
-
-👉 **Invariant :** `MainWindow` ne manipule jamais directement des `QThread`,
-seulement `PipelineController` et ses signaux.
-
-#### B.2.3 Widgets de prévisualisation (`preview_widgets.py`)
-
-* `RasterPreview`
-
-  * widget Qt pour images raster (PNG/BMP…) ;
-  * fond noir ;
-  * `show_image(path)` :
-
-    * charge la QPixmap ;
-    * l’affiche **centrée** en conservant le ratio
-      (`Qt.KeepAspectRatio`, pas de stretch) ;
-    * gère correctement les redimensionnements de la fenêtre.
-
-* `SvgPreview`
-
-  * widget Qt pour fichiers SVG (via `QSvgRenderer`) ;
-  * fond noir ;
-  * lors du `paintEvent` :
-
-    * lit le `viewBox` du SVG ;
-    * calcule un `target_rect` centré dans le widget
-      avec le **même ratio** que le `viewBox` ;
-    * rend le SVG dans ce rectangle → plus de déformation en plein écran.
-
-* La preview ILDA utilise actuellement un `SvgPreview` alimenté avec un SVG
-  représentatif (approximation). Une future version utilisera un rendu réel
-  via `ilda_preview.py`.
-
-#### B.2.4 Point d’entrée GUI (`gui_main.py`)
-
-Fichier minimal qui :
-
-* crée l’application Qt,
-* instancie `MainWindow`,
-* lance la boucle d’événements.
+- Lance les steps dans des tâches non bloquantes pour la GUI.
+- Fournit :
+  - `cancel_current_step()` pour l’annulation.
+  - Callbacks de progression et de logs vers la fenêtre principale.
+- Step ILDA appelle `core.pipeline.ilda_step.run_ilda_step`, qui lui-même appelle `core.step_ilda.export_project_to_ilda()`.
 
 ---
 
-## C. Organisation des données de projet
+## 4. Steps du pipeline
 
-Tous les outputs sont regroupés par **nom de projet** sous `PROJECTS_ROOT`
-(par défaut `projects/` à la racine du repo ; surcharge possible via
-`LPIP_PROJECTS_ROOT`).
+### 4.1. Step FFmpeg – `core/pipeline/ffmpeg_step.py`
 
-Pour un projet `mon_projet` :
+- Entrées :
+  - vidéo, nom de projet, FPS.
+- Efface/recrée `projects/<project>/frames`.
+- Appelle FFmpeg pour générer `frame_XXXX.png`.
+- Log typique :
+  - `[FFmpeg] Démarrage extraction frames...`
+  - `frames` générés dans le dossier.
 
-* `projects/mon_projet/frames/`
-  PNG extraits par FFmpeg
-  (`frame_0001.png`, `frame_0002.png`, …).
+Statut : **OK / stable**.
 
-* `projects/mon_projet/bmp/`
-  BMP générés par ImageMagick.
+### 4.2. Step Bitmap – `core/pipeline/bitmap_step.py`
 
-* `projects/mon_projet/svg/`
-  SVG vectorisés par Potrace.
+- Entrées :
+  - `frames/frame_XXXX.png`.
+  - Paramètres : `threshold_percent`, `thinning`, `max_frames`.
+- Convertit en niveaux de gris, applique seuil, écrit BMP noir/blanc :
+  - `bmp/frame_XXXX.bmp`.
+- Log :
+  - `[BMP] Conversion PNG -> BMP ...`
+  - `[bitmap] Images BMP générées...`
 
-* `projects/mon_projet/ilda/`
-  fichiers `.ild` exportés.
+Statut : **OK / stable**.
 
-Cette arborescence est **contractuelle** pour le pipeline, la GUI
-et les éventuels tests.
+### 4.3. Step Potrace – `core/pipeline/potrace_step.py`
 
----
+- Entrées : BMP.
+- Appelle `potrace.exe` (binaire externe).
+- Sorties : `svg/frame_XXXX.svg`.
+- Gère les namespaces (`<ns0:path>` etc.).
+- Log :
+  - `[Potrace] Vectorisation BMP -> SVG ...`
+  - `[potrace] SVG générés...`
 
-## D. État fonctionnel actuel
+Statut : **OK / stable**.
 
-### D.1 Fonctionnel
+### 4.4. Step ILDA (wrapper) – `core/pipeline/ilda_step.py`
 
-À la dernière mise à jour de ce document :
+- Appelle `core.step_ilda.export_project_to_ilda(project_name, ...)`.
+- Ecrit `projects/<project>/ilda/<project>.ild`.
+- Log :
+  - `[ILDA] Export ILDA ...`
+  - `[ilda] Fichier ILDA généré : ...` ou message d’erreur.
 
-* Le pipeline complet **FFmpeg → BMP → SVG → ILDA** fonctionne sur des cas
-  réels (ex. vidéo *La Linea*) et produit des `.ild` que LaserOS accepte
-  et lit comme **animations** (plus seulement une frame statique).
-
-* L’interface graphique permet :
-
-  * de lancer chaque étape séparément ;
-  * de suivre la progression via une barre de progression commune ;
-  * d’annuler proprement un step en cours ;
-  * de prévisualiser :
-
-    * la dernière frame PNG (step 1),
-    * la dernière frame BMP (step 2),
-    * la dernière frame SVG (step 3),
-    * une approximation de la sortie ILDA via les SVG (step 4).
-
-* `MainWindow` ne gère plus directement les threads ; tout passe par
-  `PipelineController` (respect de l’architecture prévue).
-
-### D.2 Limitations connues et comportement ILDA observé
-
-En important le `.ild` dans LaserOS (cas de *La Linea*), on observe :
-
-1. **Animation correcte mais image trop petite**
-
-   * L’animation centrale (le personnage/la ligne) est bien **animée**,
-     frame après frame.
-   * Toutefois, l’image n’occupe pas toute la surface
-     de projection disponible dans LaserOS :
-
-     * taille réduite,
-     * marge visible tout autour.
-
-   → Le `fill_ratio` et/ou la marge (`frame_margin_rel`) sont encore
-   **trop conservateurs**. Objectif : proposer un réglage permettant de
-   rapprocher la trajectoire des bords sans clipping, idéalement jusqu’à
-   exploiter au maximum le carré ILDA.
-
-2. **Cadre rectangulaire parasite**
-
-   * Un **cadre** rectangulaire (provenant du contour du “tableau” dans la
-     vidéo) est souvent présent autour de la scène.
-   * Ce cadre est visiblement animé (léger tremblement),
-     ce qui confirme qu’il provient des frames elles-mêmes et pas d’un bug
-     de scaling.
-   * Des heuristiques existent pour supprimer un path correspondant à la
-     bounding box globale, mais elles ne suffisent pas toujours :
-     le cadre reste parfois présent.
-
-   → Travail futur : améliorer la détection/suppression des paths
-   correspondant à ce cadre (par ex. heuristique de taille + position +
-   nombre de segments).
-
-3. **Lignes parasites / shoots vers le bord gauche**
-
-   * Des segments parasites partent parfois d’un point
-     situé près du bord gauche de l’écran et rejoignent d’autres éléments.
-   * Hypothèses :
-
-     * transitions **blanked → non-blanked** imparfaites,
-     * réutilisation d’un point précédent comme origine d’un nouveau path,
-     * mauvaise insertion d’un point de “saut” blanked entre deux chemins.
-
-   → Travail futur :
-
-   * vérifier que **chaque path** commence par un point blanked placé
-     exactement au premier point “visible” du path ;
-   * ajouter explicitement des points blanked entre deux paths séparés ;
-   * éventuellement forcer un retour à un point neutre (0,0) blanked
-     en fin de frame si nécessaire.
-
-4. **Marges et centrage ILDA**
-
-   * Malgré la normalisation globale, le contenu reste légèrement centré
-     “en bas” ou “en haut” selon les scènes.
-   * Objectif : s’assurer que la bounding box globale est calculée
-     correctement, et que le centrage X/Y se fait bien sur cette box,
-     pas sur les coordonnées ILDA déjà normalisées.
-
-5. **Performance**
-
-   * Sur la vidéo *La Linea*, les étapes Bitmap et Potrace peuvent prendre
-     plusieurs minutes pour parcourir toutes les frames.
-   * C’est acceptable pour un “rendu final”, mais pas idéal pour les tests.
-
-   → Pistes ultérieures :
-
-   * mode “draft” avec sous-échantillonnage de frames ;
-   * réduction de résolution avant vectorisation pour les prétests.
+Statut : **OK (fonctionne avec la nouvelle version de `step_ilda.py`)**.
 
 ---
 
-## E. Invariants et règles pour les futures modifications
+## 5. Cœur ILDA : `core/ilda_writer.py`
 
-Pour garder le projet cohérent, les règles suivantes sont considérées comme
-**inviolables**, sauf refonte volontaire et documentée :
+### 5.1. Types
 
-1. **Pas de QThread direct dans `MainWindow`**
+```python
+@dataclass
+class IldaPoint:
+    x: int
+    y: int
+    z: int = 0
+    blanked: bool = False
+    color_index: int = 255
 
-   * Toute gestion de thread passe par `PipelineController`.
+@dataclass
+class IldaFrame:
+    name: str = ""
+    company: str = "LPIP"
+    points: List[IldaPoint] | None = None
+    projector: int = 0
 
-2. **Code métier dans `core/` uniquement**
+    def ensure_points(self) -> List[IldaPoint]:
+        ...
+```
 
-   * Aucun import Qt dans `core/`.
-   * Communication uniquement via `StepCallbacks` et `StepResult`.
+- Coordonnées X/Y/Z attendues dans `[-32768, +32767]`.
+- `blanked=True` : déplacement sans tracer.
+- `color_index` : index de palette ILDA (LaserShowGen affiche souvent en rouge, ce qui explique les traits rouges observés).
 
-3. **Prévisualisation = responsabilité de la GUI**
+### 5.2. Écriture : `write_ilda_file(path, frames)`
 
-   * Le core signale :
+- Écrit un fichier ILDA **format 0 (3D indexed)** :
 
-     * la progression globale (0–100),
-     * les `FrameProgress` (index, total, `frame_path`).
-   * La GUI décide quel widget mettre à jour (`RasterPreview`, `SvgPreview`,
-     futur preview ILDA).
+  - Header 32 octets :
+    - magic "ILDA".
+    - format code = 0.
+    - nom de la frame (8 chars), company (8 chars).
+    - nombre de points.
+    - numéro de frame, nombre total de frames.
+    - projecteur.
 
-4. **Types stables dans le pipeline**
+  - Points : 8 octets chacun (X,Y,Z,status,color_index).
+  - Ajoute **une frame EOF** finale :
+    - `name == ""`, `company == ""`, `num_points == 0`.
 
-   * `FrameProgress` doit au minimum conserver :
-
-     * `frame_index`,
-     * `total_frames`,
-     * `frame_path`.
-   * `StepResult` doit rester extensible sans casser la compatibilité
-     (ajout de champs OK ; changements destructifs à éviter).
-
-5. **Nouveaux steps**
-
-   Pour ajouter une nouvelle étape :
-
-   1. créer `core/pipeline/<step_name>_step.py` avec une fonction
-      `run_<step_name>_step(callbacks, ...)` respectant le modèle
-      `StepCallbacks` / `StepResult` ;
-   2. enregistrer cette étape dans `PipelineController` via une méthode
-      `start_<step_name>(...)` et les signaux existants ;
-   3. n’ajouter dans `MainWindow` que :
-
-      * un bouton / groupe de paramètres,
-      * la gestion des signaux `step_started`, `step_progress`,
-        `step_finished`, `step_error` pour cette étape.
-
-6. **Gestion des outils externes**
-
-   * Toujours passer par `core.config` pour connaître les chemins de
-     FFmpeg, ImageMagick et Potrace.
-   * Ne jamais re-hardcoder ces chemins ailleurs dans le code.
-   * Encourager l’utilisation des variables d’environnement `LPIP_*`
-     ou d’outils installés dans le `PATH`.
-     Des binaires peuvent être fournis dans le repo, mais restent
-     configurés via ces mécanismes.
-
-7. **Style général du code**
-
-   * viser un style : générique, portable, robuste, orienté objets,
-     avec une attention particulière à :
-
-     * la lisibilité,
-     * la séparation des responsabilités,
-     * la testabilité (steps réutilisables en CLI ou tests unitaires).
+- Les frames **vides** (0 points) sont gardées pour la synchronisation.
 
 ---
 
-## F. Liens
+## 6. Prévisualisation ILDA : `core/ilda_preview.py`
 
-* Dépôt GitHub :
-  [https://github.com/HyperionXXI/laser_pipeline_gui](https://github.com/HyperionXXI/laser_pipeline_gui)
+### 6.1. Lecture : `load_ilda_frames(path, max_frames=None)`
+
+- Lit un `.ild` :
+
+  - Vérifie le magic "ILDA".
+  - Vérifie `format_code == 0`.
+  - Lit `num_points`, `name`, `company`, `projector`.
+  - Si `num_points == 0` et `name == ""` et `company == ""` → EOF (on s’arrête).
+  - Sinon, lit `num_points` points et construit un `IldaFrame`.
+
+- `max_frames` permet de limiter la lecture (utile pour la preview).
+
+### 6.2. Rendu : `render_ilda_frame_to_png(frame, out_png, ...)`
+
+- Convertit les coordonnées ILDA en pixels via `_ilda_to_screen`.
+- Trace les segments non blanked en blanc sur fond noir.
+- Utilisé par la GUI pour la 4e colonne (ILDA).
+
+### 6.3. Helper : `render_ilda_preview(ilda_path, out_png, frame_index=0)`
+
+- Charge suffisamment de frames pour couvrir `frame_index`.
+- Si l’index est dans l’intervalle → frame correspondante.
+- Sinon → `frames[0]`.
+- Sauvegarde le PNG dans `projects/<project>/preview/ilda_preview_XXXX.png`.
+
+---
+
+## 7. Conversion SVG → ILDA : `core/step_ilda.py`
+
+### 7.1. But
+
+Convertir `svg/frame_XXXX.svg` en une série de `IldaFrame` puis écrire `projects/<project>/ilda/<project>.ild`.
+
+### 7.2. Parsing SVG
+
+- Utilise `xml.etree.ElementTree` + `svgpathtools.parse_path`.
+
+  - `_load_svg_paths(svg_file)` :
+    - Parcourt tous les éléments XML.
+    - Garde ceux tels que `elem.tag.lower().endswith("path")` (gère namespaces).
+    - Lit `d = elem.get("d")`.
+    - Passe `d` à `parse_path(d)`.
+    - Convertit chaque `Path` en polyligne (`_path_to_polyline`) :
+      - `Line` → start + end.
+      - Courbes → échantillonnées en plusieurs points.
+    - Calcule une bbox `(min_x, max_x, min_y, max_y)`.
+    - Retourne une liste de `_PathData(points, bbox)`.
+
+### 7.3. Bbox globale
+
+- `_combine_bbox(all_bboxes)` calcule :
+
+  - `global_bbox_initial = (min_x_global, max_x_global, min_y_global, max_y_global)`.
+
+### 7.4. Détection / suppression de cadre
+
+- Si `remove_outer_frame=True` :
+
+  - `_mark_outer_frame_paths(frames_paths, global_bbox_initial, frame_margin_rel)` :
+    - Marque `is_outer_frame=True` si bbox ≈ bbox globale (tolérance relative).
+  - Recalcule une bbox globale filtrée sans les chemins marqués `is_outer_frame`.
+
+- Sinon, `global_bbox = global_bbox_initial`.
+
+### 7.5. Normalisation ILDA
+
+- `_make_normalizer(global_bbox, fit_axis, fill_ratio)` :
+
+  - Centre sur le centre de la bbox.
+  - Choisit un span de référence :
+    - `"max"` (par défaut), `"min"`, `"x"`, `"y"`.
+  - Applique `fill_ratio` pour garder une marge.
+  - Convertit chaque `(x, y)` en `(X_ilda, Y_ilda)` dans la plage ILDA en clampant.
+
+### 7.6. Filtrage des petits chemins
+
+- Calcule `global_span = max(span_x, span_y)` (bbox globale).
+- Pour chaque `_PathData` :
+
+  - `w = x1 - x0`, `h = y1 - y0`.
+  - `rel_size = max(w, h) / global_span`.
+  - Si `rel_size < min_rel_size` → chemin ignoré (parasite).
+
+### 7.7. Construction des `IldaFrame`
+
+- Pour chaque frame (index `idx`) :
+
+  - Pour chaque chemin `_PathData` :
+    - Si `is_outer_frame=True` ou `rel_size < min_rel_size` → ignoré.
+    - Sinon :
+      - Convertit tous les points en coordonnées ILDA via `normalizer`.
+      - Ajoute un premier point en `blanked=True` (déplacement sans trace).
+      - Ajoute les points suivants en `blanked=False`.
+
+  - Crée un `IldaFrame` :
+    - `name=f"F{idx:04d}"` (F0000, F0001, …).
+    - `company="LPIP"`.
+    - `points=ilda_points`.
+
+- Écrit tout avec `write_ilda_file(...)`.
+
+### 7.8. Signature de `export_project_to_ilda`
+
+```python
+def export_project_to_ilda(
+    project_name: str,
+    fit_axis: str = "max",
+    fill_ratio: float = 0.95,
+    min_rel_size: float = 0.01,
+    remove_outer_frame: bool = True,
+    frame_margin_rel: float = 0.02,
+    check_cancel: Optional[Callable[[], bool]] = None,
+    report_progress: Optional[Callable[[int], None]] = None,
+) -> Path:
+    ...
+```
+
+- Compatible avec les appels existants (notamment `run_ilda_step`).
+
+---
+
+## 8. Comportement observé & problèmes connus (La Linea)
+
+### 8.1. Logs typiques
+
+- Pipeline complet :
+
+  - FFmpeg → OK.
+  - Bitmap → OK.
+  - Potrace → OK.
+  - ILDA → OK (`projet_demo.ild` généré).
+
+### 8.2. GUI
+
+- Sur les frames 10, 100, 150, 151 :
+  - PNG / BMP / SVG cohérents.
+  - ILDA : personnage centré, rendu correct.
+
+### 8.3. LaserShowGen
+
+- Le fichier `projet_demo.ild` :
+  - S’ouvre correctement.
+  - Traits souvent affichés en rouge (palette du viewer).
+  - Certaines frames semblent “manquantes” (ex. autour de 150) :
+    - Il s’agit en fait de **frames ILDA vides** (0 points) :
+      - tous les chemins de la frame ont été filtrés (cadre ou parasites).
+
+### 8.4. LaserOS
+
+- À l’import :
+  - Le motif central semble **assez fixe**.
+  - Le **cadre** ou des éléments périphériques semblent **bouger** au cours de l’animation.
+- Causes probables :
+  - Heuristique de cadre encore imparfaite.
+  - Légères variations de la bbox globale d’une frame à l’autre, ce qui modifie le “zoom” et la position relative de certains éléments.
+
+---
+
+## 9. Limitations actuelles
+
+1. **Cadre parasite encore présent / mouvant** :
+   - L’algorithme `_mark_outer_frame_paths` est assez simple (bbox ≈ bbox globale).
+
+2. **Frames vides** → impression de “trames manquantes” :
+   - Dès qu’une frame n’a que des chemins supprimés (cadre ou trop petits), la frame ILDA est vide.
+
+3. **Contenus complexes (Star Wars Arcade)** :
+   - Paramètre `min_rel_size` adapté à La Linea mais trop agressif pour les scènes très détaillées.
+
+4. **Décalage visuel entre vidéo et ILDA dans la GUI** :
+   - Inévitable car l’ILDA est normalisé et centré dans la fenêtre de projection.
+
+---
+
+## 10. Pistes pour évolution future
+
+1. Améliorer la détection du cadre externe :
+   - Ajouter des critères géométriques (nombre de côtés, rectitude, ratio largeur/hauteur…).
+   - Stabiliser la bbox de référence pour limiter les variations d’une frame à l’autre.
+
+2. Gérer mieux les frames vides :
+   - Optionnel : recopier les points de la dernière frame non vide au lieu de produire une frame vide.
+
+3. Profils de traitement :
+   - Profil “La Linea” : suppression de cadre + filtrage agressif des petits parasites.
+   - Profil “Arcade” : suppression de cadre optionnelle, `min_rel_size` très faible.
+
+4. Exposer des paramètres ILDA dans la GUI :
+   - `min_rel_size`, `frame_margin_rel`, `fit_axis`, `fill_ratio`.
+
+---
+
+## 11. Référence de reprise
+
+- Commit de base : `f73209b736854e845a6d07d311a7618a0212cae4`.
+- Projet de test principal : `projet_demo` basé sur `la_linea (30sec).mp4`.
+- Points clés :
+  - Le pipeline complet fonctionne.
+  - Le parsing SVG (namespaces) et l’écriture ILDA sont maintenant robustes.
+  - Les problèmes restants sont surtout **heuristiques** (cadre, filtrage) et non structurels.
+
