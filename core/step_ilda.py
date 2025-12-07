@@ -58,18 +58,17 @@ def _parse_svg_path_d(
     Parse de l'attribut 'd' d'un <path> SVG.
 
     Supporte :
-      - M/m : moveto
-      - L/l : lineto
-      - H/h : horizontal lineto
-      - V/v : vertical lineto
-      - C/c : courbe de Bézier cubique (approximée par polyline)
-      - Z/z : closepath
+    - M/m : moveto
+    - L/l : lineto
+    - H/h : horizontal lineto
+    - V/v : vertical lineto
+    - C/c : courbe de Bézier cubique (approximée par polyline)
+    - Z/z : closepath
 
     Retourne une liste de sous-chemins, chaque sous-chemin est une liste
     de (x, y) en coordonnées SVG.
     """
     tokens = _PATH_TOKEN_RE.findall(d)
-
     subpaths: list[list[tuple[float, float]]] = []
     current_path: list[tuple[float, float]] = []
     current_cmd: str | None = None
@@ -94,6 +93,7 @@ def _parse_svg_path_d(
             buf = []
             if cmd in "Zz":
                 if current_path:
+                    # Ferme le chemin sur lui-même
                     current_path.append(current_path[0])
                 continue
             continue
@@ -110,6 +110,7 @@ def _parse_svg_path_d(
                     nx += x
                     ny += y
                 start_new_path(nx, ny)
+            # Les moveto suivants deviennent des lineto
             current_cmd = "L" if current_cmd == "M" else "l"
 
         # L/l : lineto
@@ -162,6 +163,7 @@ def _parse_svg_path_d(
 
     if current_path:
         subpaths.append(current_path)
+
     return subpaths
 
 
@@ -189,8 +191,8 @@ def _parse_transform(s: str):
     """
     Parse très simple de 'transform' pour les cas Potrace :
 
-      - translate(tx, ty)
-      - scale(sx, sy) ou scale(s)
+    - translate(tx, ty)
+    - scale(sx, sy) ou scale(s)
 
     Composés éventuels : translate(...) scale(...)
     """
@@ -214,6 +216,7 @@ def _parse_transform(s: str):
         else:
             continue
         m = _mult_m(m, tm)
+
     return m
 
 
@@ -233,7 +236,6 @@ def _load_svg_paths(svg_path: Path, curve_steps: int = 20) -> List[List[Tuple[fl
     """
     tree = ET.parse(svg_path)
     root = tree.getroot()
-
     paths: List[List[Tuple[float, float]]] = []
 
     def walk(elem, parent_m):
@@ -275,29 +277,37 @@ def _load_svg_paths(svg_path: Path, curve_steps: int = 20) -> List[List[Tuple[fl
     return paths
 
 
+def _is_closed_path(path: List[Tuple[float, float]], tol: float) -> bool:
+    if len(path) < 3:
+        return False
+    (x0, y0) = path[0]
+    (x1, y1) = path[-1]
+    return abs(x0 - x1) + abs(y0 - y1) <= tol
+
+
 def _compute_bounds(
     frames_paths: List[List[List[Tuple[float, float]]]],
     remove_outer_frame: bool = False,
     frame_margin_rel: float = 0.02,
     min_rel_size: float = 0.01,
-) -> Tuple[float, float, float, float]:
+) -> tuple[tuple[float, float, float, float], set[tuple[int, int]]]:
     """
     Calcule la bounding box globale sur l'ensemble des frames.
 
     Si ``remove_outer_frame`` est True, on tente d'ignorer un éventuel
-    grand path fermé jouant le rôle de "cadre" extérieur (typiquement
-    la bordure du tableau dans *La Linea*), afin que la normalisation
-    ILDA utilise uniquement le contenu utile (personnages, décor intérieur).
+    grand path fermé jouant le rôle de "cadre" extérieur (typiquement la
+    bordure du tableau dans *La Linea*), afin que la normalisation ILDA
+    utilise uniquement le contenu utile (personnages, décor intérieur).
 
-    Heuristique utilisée pour marquer un path comme cadre :
+    Retourne un tuple :
 
-    - path fermé (via :func:`_is_closed_path`) ;
-    - surface de sa bounding box >= 50% de la surface globale ;
-    - au moins 3 côtés de sa bounding box sont proches (à ``frame_margin_rel``
-      près) de la bounding box globale.
+    - bounds : (min_x, max_x, min_y, max_y)
+    - frame_paths : ensemble de couples (frame_index, path_index) à
+      considérer comme "cadres" et à NE PAS exporter en ILDA.
     """
     xs_all: List[float] = []
     ys_all: List[float] = []
+
     for paths in frames_paths:
         for p in paths:
             for x, y in p:
@@ -314,7 +324,7 @@ def _compute_bounds(
 
     # Cas simple : pas de tentative de suppression de cadre
     if not remove_outer_frame:
-        return min_x, max_x, min_y, max_y
+        return (min_x, max_x, min_y, max_y), set()
 
     span_x = max_x - min_x or 1.0
     span_y = max_y - min_y or 1.0
@@ -324,6 +334,7 @@ def _compute_bounds(
 
     # 1) Détection des paths "cadre"
     frame_paths: set[tuple[int, int]] = set()
+
     for fi, paths in enumerate(frames_paths):
         for pi, path in enumerate(paths):
             if len(path) < 4:
@@ -357,10 +368,11 @@ def _compute_bounds(
 
     # 2) Re-calcul de la bounding box en ignorant les cadres trouvés
     if not frame_paths:
-        return min_x, max_x, min_y, max_y
+        return (min_x, max_x, min_y, max_y), frame_paths
 
     xs: List[float] = []
     ys: List[float] = []
+
     for fi, paths in enumerate(frames_paths):
         for pi, p in enumerate(paths):
             if (fi, pi) in frame_paths:
@@ -369,19 +381,12 @@ def _compute_bounds(
                 xs.append(x)
                 ys.append(y)
 
-    # Si tout a été filtré par erreur, on revient à la bbox globale initiale
+    # Si tout a été filtré par erreur, on revient à la bbox globale
     if not xs:
-        return min_x, max_x, min_y, max_y
+        frame_paths.clear()
+        return (min_x, max_x, min_y, max_y), frame_paths
 
-    return min(xs), max(xs), min(ys), max(ys)
-
-
-def _is_closed_path(path: List[Tuple[float, float]], tol: float) -> bool:
-    if len(path) < 3:
-        return False
-    (x0, y0) = path[0]
-    (x1, y1) = path[-1]
-    return abs(x0 - x1) + abs(y0 - y1) <= tol
+    return (min(xs), max(xs), min(ys), max(ys)), frame_paths
 
 
 def _paths_to_ilda_points(
@@ -390,7 +395,7 @@ def _paths_to_ilda_points(
     *,
     min_rel_size: float,
     fill_ratio: float,
-    fit_axis: Literal["max", "x", "y"],
+    fit_axis: str,
     remove_outer_frame: bool = False,
     frame_margin_rel: float = 0.0,
     blank_move_points: int = 4,
@@ -401,13 +406,15 @@ def _paths_to_ilda_points(
     - `bounds` : (min_x, max_x, min_y, max_y) communs à toutes les frames.
     - `min_rel_size` : filtre les très petits chemins (bruit).
     - `fill_ratio` : fraction de la plage [-32767, +32767] utilisée.
-    - `fit_axis` : "max" (par défaut), "x" ou "y" pour le choix de l’axe de référence.
-    - `remove_outer_frame` : paramètre conservé pour compatibilité ; non utilisé ici.
-    - `frame_margin_rel` : idem, utilisé en amont lors du calcul du bounding box.
+    - `fit_axis` : "max" (par défaut), "x" ou "y" pour le choix de
+      l’axe de référence.
+    - `remove_outer_frame` / `frame_margin_rel` : paramètres conservés
+      pour compatibilité ; la détection de cadre est faite en amont.
     - `blank_move_points` : nombre de points blankés insérés pour les
       déplacements entre chemins (limite les lignes parasites).
     """
     min_x, max_x, min_y, max_y = bounds
+
     span_x = max(max_x - min_x, 1e-9)
     span_y = max(max_y - min_y, 1e-9)
 
@@ -425,7 +432,6 @@ def _paths_to_ilda_points(
     if span_ref <= 0.0:
         return []
 
-    # ⚠️ Correction importante :
     # On est centré autour du milieu, donc les extrémités sont à ±span_ref/2.
     # Pour les mapper sur ±max_extent, il faut :
     #   scale = max_extent / (span_ref / 2) = 2 * max_extent / span_ref
@@ -463,8 +469,8 @@ def _paths_to_ilda_points(
         # Premier point du chemin en coordonnées ILDA
         start_x, start_y = to_ilda_xy(*path[0])
 
-        # Si on vient d'un autre chemin, on insère des points de déplacement blankés
-        # entre la fin précédente et le début du nouveau chemin.
+        # Si on vient d'un autre chemin, on insère des points de déplacement
+        # blankés entre la fin précédente et le début du nouveau chemin.
         if prev_end_xy is not None and blank_move_points > 0:
             px, py = prev_end_xy
             for i in range(1, blank_move_points + 1):
@@ -495,7 +501,6 @@ def _paths_to_ilda_points(
     return ilda_points
 
 
-
 # ======================================================================
 # Étape pipeline : export ILDA pour un projet
 # ======================================================================
@@ -518,7 +523,7 @@ def export_project_to_ilda(
     - Calcule une bounding box GLOBALE sur l'ensemble des SVG pour
       garantir une taille et un centrage stables d'une frame à l'autre.
     - Si remove_outer_frame=True : supprime un éventuel cadre qui colle
-      à cette bounding box globale (typique La Linea).
+      à cette bounding box globale (typique *La Linea*).
     - Écrit un fichier .ild dans projects/<project>/ilda/<project>.ild
     - Retourne le Path du fichier créé.
     """
@@ -533,9 +538,11 @@ def export_project_to_ilda(
 
     # 1) Première passe : charger les chemins et accumuler la bbox globale
     per_frame_paths: List[List[List[Tuple[float, float]]]] = []
+
     for svg_file in svg_files:
         if check_cancel is not None and check_cancel():
             raise RuntimeError("Export ILDA annulé par l'utilisateur (phase 1).")
+
         paths = _load_svg_paths(svg_file)
         if not paths:
             continue
@@ -546,13 +553,12 @@ def export_project_to_ilda(
             "Aucun chemin exploitable trouvé dans les SVG du projet."
         )
 
-    bounds = _compute_bounds(
+    bounds, frame_paths = _compute_bounds(
         per_frame_paths,
         remove_outer_frame=remove_outer_frame,
         frame_margin_rel=frame_margin_rel,
         min_rel_size=min_rel_size,
     )
-
 
     # 2) Seconde passe : normalisation + construction des frames ILDA
     frames: List[ILDAFrame] = []
@@ -562,8 +568,16 @@ def export_project_to_ilda(
         if check_cancel is not None and check_cancel():
             raise RuntimeError("Export ILDA annulé par l'utilisateur (phase 2).")
 
+        # On retire explicitement les paths marqués comme "cadre"
+        if frame_paths:
+            filtered_paths = [
+                p for pi, p in enumerate(paths) if (idx, pi) not in frame_paths
+            ]
+        else:
+            filtered_paths = paths
+
         ilda_points = _paths_to_ilda_points(
-            paths,
+            filtered_paths,
             bounds,
             min_rel_size=min_rel_size,
             fill_ratio=fill_ratio,
