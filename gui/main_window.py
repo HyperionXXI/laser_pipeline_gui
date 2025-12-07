@@ -3,12 +3,14 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 from datetime import datetime
+
 from core.pipeline.base import FrameProgress
 from core.config import PROJECTS_ROOT
 
 from .preview_widgets import RasterPreview, SvgPreview
 from .pipeline_controller import PipelineController
 
+from PySide6.QtGui import QTextCursor
 from PySide6.QtCore import Slot
 from PySide6.QtWidgets import (
     QApplication,
@@ -250,6 +252,10 @@ class MainWindow(QMainWindow):
     def log(self, text: str) -> None:
         ts = datetime.now().strftime("[%H:%M:%S]")
         self.log_view.append(f"{ts} {text}")
+        # Auto-scroll vers la dernière ligne
+        self.log_view.moveCursor(QTextCursor.End)
+        self.log_view.ensureCursorVisible()
+
 
 
     def set_busy(self, busy: bool) -> None:
