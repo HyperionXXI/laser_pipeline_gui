@@ -6,7 +6,7 @@ from datetime import datetime
 
 from core.pipeline.base import FrameProgress
 from core.config import PROJECTS_ROOT
-
+from core.ilda_preview import render_ilda_preview
 from .preview_widgets import RasterPreview, SvgPreview
 from .pipeline_controller import PipelineController
 
@@ -462,18 +462,18 @@ class MainWindow(QMainWindow):
         else:
             self.log("[Preview] Pas encore de preview ILDA (exportez d'abord).")
 
-
     def on_preview_frame(self) -> None:
         """
         Prévisualise une frame donnée (index dans self.spin_frame)
-        pour les trois étapes intermédiaires : PNG, BMP, SVG.
+        pour les trois étapes intermédiaires : PNG, BMP, SVG,
+        et tente aussi une preview ILDA pour la même frame.
         """
         project = (self.edit_project.text() or "").strip()
         if not project:
             self.log("Erreur prévisualisation : nom de projet vide.")
             return
 
-        frame_index = self.spin_frame.value()
+        frame_index = self.spin_frame.value()  # 1, 2, 3, ...
 
         project_root = PROJECTS_ROOT / project
         png_dir = project_root / "frames"
@@ -496,11 +496,48 @@ class MainWindow(QMainWindow):
         self.log(f"[Preview] Frame {frame_index} (SVG) → {svg_path}")
         self.preview_svg.show_svg(str(svg_path))
 
+        # ILDA : si un fichier .ild existe déjà, on essaie de rasteriser
+        ilda_path = project_root / "ilda" / f"{project}.ild"
+        if ilda_path.exists():
+            try:
+                preview_dir = project_root / "preview"
+                preview_dir.mkdir(parents=True, exist_ok=True)
+                ilda_png = preview_dir / f"ilda_preview_{frame_index:04d}.png"
+
+                # frame_index (spin) est 1-based ; les frames ILDA sont 0-based.
+                render_ilda_preview(
+                    ilda_path,
+                    ilda_png,
+                    frame_index=max(frame_index - 1, 0),
+                )
+
+                self.preview_ilda.show_image(str(ilda_png))
+                self.log(
+                    f"[Preview] Frame {frame_index} (ILDA) → {ilda_png}"
+                )
+            except Exception as e:
+                self.log(
+                    f"[Preview] Frame {frame_index} (ILDA) impossible : {e}"
+                )
+        else:
+            self.log(
+                "[Preview] Aucun fichier ILDA trouvé pour prévisualiser cette frame."
+            )
+
     def on_cancel_task(self) -> None:
         """
-        Demande l'annulation du step en cours au PipelineController.
+        Appelé quand l'utilisateur clique sur
+        « Annuler la tâche en cours ».
+
+        Demande simplement au PipelineController d'annuler
+        le step en cours (s'il y en a un).
         """
+        # On désactive le bouton tout de suite pour éviter les doubles clics.
+        self.btn_cancel_task.setEnabled(False)
+
+        # `self.pipeline` est l'instance de PipelineController créée dans __init__
         self.pipeline.cancel_current_step()
+
 
     # ------------------------------------------------------------------
     # Helpers pour trouver la "dernière" ou "première" frame d'un dossier
