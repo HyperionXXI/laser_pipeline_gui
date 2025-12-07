@@ -457,14 +457,17 @@ def _paths_to_ilda_points(
         if len(path) < 2:
             continue
 
-        # Filtre les chemins très petits (bruit) en fonction du bounding global.
+        # Filtre bruit : uniquement les très petits chemins FERMÉS.
         xs = [p[0] for p in path]
         ys = [p[1] for p in path]
-        if (
-            (max(xs) - min(xs) < span_x * min_rel_size)
-            and (max(ys) - min(ys) < span_y * min_rel_size)
-        ):
+        width = max(xs) - min(xs)
+        height = max(ys) - min(ys)
+        path_span = max(width, height)
+
+        # Seulement si c'est vraiment minuscule ET fermé (souvent poussière / points isolés)
+        if path_span < max(span_x, span_y) * min_rel_size and _is_closed_path(path, tol=1e-6):
             continue
+
 
         # Premier point du chemin en coordonnées ILDA
         start_x, start_y = to_ilda_xy(*path[0])

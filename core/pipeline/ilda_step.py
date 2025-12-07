@@ -12,8 +12,8 @@ from .base import FrameProgress, StepResult, ProgressCallback, CancelCallback
 def run_ilda_step(
     project: str,
     fit_axis: str = "max",
-    fill_ratio: float = 0.95,
-    min_rel_size: float = 0.01,
+    fill_ratio: float = 0.98,  # cf. 3.2
+    min_rel_size: float = 0.003,  # au lieu de 0.01
     remove_outer_frame: bool = True,
     frame_margin_rel: float = 0.02,
     progress_cb: Optional[ProgressCallback] = None,
