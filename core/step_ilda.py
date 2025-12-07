@@ -276,18 +276,102 @@ def _load_svg_paths(svg_path: Path, curve_steps: int = 20) -> List[List[Tuple[fl
 
 
 def _compute_bounds(
-    frames_paths: List[List[List[Tuple[float, float]]]]
+    frames_paths: List[List[List[Tuple[float, float]]]],
+    remove_outer_frame: bool = False,
+    frame_margin_rel: float = 0.02,
+    min_rel_size: float = 0.01,
 ) -> Tuple[float, float, float, float]:
-    xs: List[float] = []
-    ys: List[float] = []
+    """
+    Calcule la bounding box globale sur l'ensemble des frames.
+
+    Si ``remove_outer_frame`` est True, on tente d'ignorer un éventuel
+    grand path fermé jouant le rôle de "cadre" extérieur (typiquement
+    la bordure du tableau dans *La Linea*), afin que la normalisation
+    ILDA utilise uniquement le contenu utile (personnages, décor intérieur).
+
+    Heuristique utilisée pour marquer un path comme cadre :
+
+    - path fermé (via :func:`_is_closed_path`) ;
+    - surface de sa bounding box >= 50% de la surface globale ;
+    - au moins 3 côtés de sa bounding box sont proches (à ``frame_margin_rel``
+      près) de la bounding box globale.
+    """
+    xs_all: List[float] = []
+    ys_all: List[float] = []
     for paths in frames_paths:
         for p in paths:
+            for x, y in p:
+                xs_all.append(x)
+                ys_all.append(y)
+
+    if not xs_all:
+        raise RuntimeError("Aucun point vectoriel trouvé dans les SVG.")
+
+    min_x = min(xs_all)
+    max_x = max(xs_all)
+    min_y = min(ys_all)
+    max_y = max(ys_all)
+
+    # Cas simple : pas de tentative de suppression de cadre
+    if not remove_outer_frame:
+        return min_x, max_x, min_y, max_y
+
+    span_x = max_x - min_x or 1.0
+    span_y = max_y - min_y or 1.0
+    global_span = max(span_x, span_y)
+    frame_tol = global_span * frame_margin_rel
+    global_area = span_x * span_y or 1.0
+
+    # 1) Détection des paths "cadre"
+    frame_paths: set[tuple[int, int]] = set()
+    for fi, paths in enumerate(frames_paths):
+        for pi, path in enumerate(paths):
+            if len(path) < 4:
+                continue
+
+            xs = [x for x, _ in path]
+            ys = [y for _, y in path]
+            span_px = (max(xs) - min(xs)) or 0.0
+            span_py = (max(ys) - min(ys)) or 0.0
+            path_span = max(span_px, span_py)
+
+            # Trop petit pour être un cadre
+            if path_span < global_span * min_rel_size:
+                continue
+
+            if not _is_closed_path(path, tol=frame_tol):
+                continue
+
+            path_area = span_px * span_py
+
+            near_left = abs(min(xs) - min_x) <= frame_tol
+            near_right = abs(max(xs) - max_x) <= frame_tol
+            near_bottom = abs(min(ys) - min_y) <= frame_tol
+            near_top = abs(max(ys) - max_y) <= frame_tol
+            touches = sum((near_left, near_right, near_bottom, near_top))
+
+            # Il couvre la majeure partie de la scène et touche au moins
+            # trois bords : on le considère comme un cadre.
+            if touches >= 3 and path_area >= global_area * 0.5:
+                frame_paths.add((fi, pi))
+
+    # 2) Re-calcul de la bounding box en ignorant les cadres trouvés
+    if not frame_paths:
+        return min_x, max_x, min_y, max_y
+
+    xs: List[float] = []
+    ys: List[float] = []
+    for fi, paths in enumerate(frames_paths):
+        for pi, p in enumerate(paths):
+            if (fi, pi) in frame_paths:
+                continue
             for x, y in p:
                 xs.append(x)
                 ys.append(y)
 
+    # Si tout a été filtré par erreur, on revient à la bbox globale initiale
     if not xs:
-        raise RuntimeError("Aucun point vectoriel trouvé dans les SVG.")
+        return min_x, max_x, min_y, max_y
 
     return min(xs), max(xs), min(ys), max(ys)
 
@@ -453,7 +537,13 @@ def export_project_to_ilda(
             "Aucun chemin exploitable trouvé dans les SVG du projet."
         )
 
-    bounds = _compute_bounds(per_frame_paths)
+    bounds = _compute_bounds(
+        per_frame_paths,
+        remove_outer_frame=remove_outer_frame,
+        frame_margin_rel=frame_margin_rel,
+        min_rel_size=min_rel_size,
+    )
+
 
     # 2) Seconde passe : normalisation + construction des frames ILDA
     frames: List[ILDAFrame] = []
