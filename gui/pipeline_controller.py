@@ -158,6 +158,7 @@ class PipelineController(QObject):
         fit_axis: str = "max",
         fill_ratio: float = 0.95,
         min_rel_size: float = 0.01,
+        ilda_mode: str = "classic",
     ) -> None:
         """
         Lance l'export ILDA (SVG -> .ild) pour un projet.
@@ -169,7 +170,9 @@ class PipelineController(QObject):
             fit_axis,
             fill_ratio,
             min_rel_size,
+            ilda_mode,
         )
+
 
     def cancel_current_step(self) -> None:
         if self._worker is not None:

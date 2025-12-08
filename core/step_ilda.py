@@ -15,6 +15,7 @@ from .ilda_writer import (
     write_ilda_file,
     write_demo_square,  # conserve pour compat éventuelle
 )
+from .ilda_profiles import IldaProfile, get_ilda_profile
 
 # Backward-compat (anciens noms utilisés ailleurs dans le projet)
 ILDAPoint = IldaPoint
@@ -224,21 +225,26 @@ def export_project_to_ilda(
     frame_margin_rel: float = 0.02,
     check_cancel: Optional[Callable[[], bool]] = None,
     report_progress: Optional[Callable[[int], None]] = None,
+    mode: str = "classic",
 ) -> Path:
     """
     Export ILDA pour un projet donné.
 
     Paramètres :
-    - project_name : nom du projet (dossier dans PROJECTS_ROOT)
-    - fit_axis     : "max", "min", "x", "y" (axe de référence pour le zoom)
-    - fill_ratio   : ratio de remplissage de la fenêtre ILDA globale
-    - min_rel_size : taille relative minimale pour garder un chemin
-    - remove_outer_frame : si True, essaie de supprimer le "cadre"
-    - frame_margin_rel   : tolérance pour la détection de cadre
-    - check_cancel / report_progress : callbacks pour le GUI
-
-    Le prototype est volontairement compatible avec l’ancienne version
-    pour éviter de casser les appels existants.
+    - project_name      : nom du projet (dossier dans PROJECTS_ROOT)
+    - fit_axis          : "max", "min", "x", "y" (axe de référence pour le zoom)
+    - fill_ratio        : ratio de remplissage de la fenêtre ILDA globale
+    - min_rel_size      : taille relative minimale pour garder un chemin
+    - remove_outer_frame: si True, essaie de supprimer le "cadre"
+    - frame_margin_rel  : tolérance pour la détection de cadre
+    - check_cancel      : callback d'annulation
+    - report_progress   : callback de progression (0–100)
+    - mode              : nom du profil ILDA ("classic", "arcade", ...)
+                          Pour l’instant, le profil est surtout utilisé pour
+                          centraliser la couleur par défaut, sans changer le
+                          comportement géométrique existant.
+    Le prototype reste compatible avec l’ancienne version pour éviter de
+    casser les appels existants.
     """
     project_root = PROJECTS_ROOT / project_name
     svg_dir = project_root / "svg"
@@ -248,6 +254,9 @@ def export_project_to_ilda(
     svg_files = sorted(svg_dir.glob("frame_*.svg"))
     if not svg_files:
         raise RuntimeError(f"Aucun SVG trouvé dans {svg_dir}")
+
+    # Profil ILDA (classic / arcade / autre)
+    profile: IldaProfile = get_ilda_profile(mode)
 
     # --------------------------------------------------------------
     # 1) Lecture de tous les SVG en chemins + bboxes
@@ -265,7 +274,8 @@ def export_project_to_ilda(
         pd.bbox for frame_paths in frames_paths for pd in frame_paths
     ]
     if not all_bboxes:
-        # C'est l'erreur que tu as vue : on la garde, mais on ne devrait plus y arriver
+        # C'est l'erreur que tu avais vue : on la garde, mais
+        # avec le parsing actuel, on ne devrait plus y arriver.
         raise RuntimeError("Aucun chemin exploitable trouvé dans les SVG du projet.")
 
     global_bbox_initial = _combine_bbox(all_bboxes)
@@ -332,13 +342,25 @@ def export_project_to_ilda(
             # Premier point blanked = déplacement sans trace
             first_x, first_y = ilda_coords[0]
             ilda_points.append(
-                IldaPoint(x=first_x, y=first_y, z=0, blanked=True, color_index=0)
+                IldaPoint(
+                    x=first_x,
+                    y=first_y,
+                    z=0,
+                    blanked=True,
+                    color_index=profile.base_color_index,
+                )
             )
 
             # Points lumineux
             for x, y in ilda_coords[1:]:
                 ilda_points.append(
-                    IldaPoint(x=x, y=y, z=0, blanked=False, color_index=0)
+                    IldaPoint(
+                        x=x,
+                        y=y,
+                        z=0,
+                        blanked=False,
+                        color_index=profile.base_color_index,
+                    )
                 )
 
         frame = IldaFrame(

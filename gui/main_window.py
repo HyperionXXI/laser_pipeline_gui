@@ -7,24 +7,28 @@ from datetime import datetime
 from core.pipeline.base import FrameProgress
 from core.config import PROJECTS_ROOT
 from core.ilda_preview import render_ilda_preview
+
 from .preview_widgets import RasterPreview, SvgPreview
 from .pipeline_controller import PipelineController
 
 from PySide6.QtGui import QTextCursor
-from PySide6.QtCore import Slot
+from PySide6.QtCore import Qt, Slot
 from PySide6.QtWidgets import (
     QApplication,
-    QCheckBox,
-    QGroupBox,
-    QHBoxLayout,
-    QLabel,
-    QLineEdit,
     QMainWindow,
+    QWidget,
     QPushButton,
     QSpinBox,
+    QComboBox,
     QTextEdit,
+    QLineEdit,
+    QLabel,
+    QFileDialog,
+    QHBoxLayout,
     QVBoxLayout,
-    QWidget,
+    QGridLayout,
+    QGroupBox,
+    QCheckBox,
     QSizePolicy,
     QProgressBar,
 )
@@ -117,8 +121,11 @@ class MainWindow(QMainWindow):
         # ---- 4 colonnes ----
         cols_layout = QHBoxLayout()
 
+        # ------------------------------------------------------------
         # Colonne 1 : FFmpeg
+        # ------------------------------------------------------------
         col1_layout = QVBoxLayout()
+
         group_step1 = QGroupBox("1. FFmpeg → PNG (frames)")
         step1_layout = QVBoxLayout(group_step1)
         self.btn_ffmpeg = QPushButton("Lancer FFmpeg")
@@ -139,8 +146,11 @@ class MainWindow(QMainWindow):
         col1_widget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
         cols_layout.addWidget(col1_widget)
 
+        # ------------------------------------------------------------
         # Colonne 2 : Bitmap
+        # ------------------------------------------------------------
         col2_layout = QVBoxLayout()
+
         group_step2 = QGroupBox("2. Bitmap (ImageMagick)")
         step2_layout = QVBoxLayout(group_step2)
 
@@ -182,8 +192,11 @@ class MainWindow(QMainWindow):
         col2_widget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
         cols_layout.addWidget(col2_widget)
 
+        # ------------------------------------------------------------
         # Colonne 3 : Potrace / SVG
+        # ------------------------------------------------------------
         col3_layout = QVBoxLayout()
+
         group_step3 = QGroupBox("3. Vectorisation (Potrace)")
         step3_layout = QVBoxLayout(group_step3)
         self.btn_potrace = QPushButton("Lancer Potrace")
@@ -204,17 +217,33 @@ class MainWindow(QMainWindow):
         col3_widget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
         cols_layout.addWidget(col3_widget)
 
-        # Colonne 4 : ILDA
+        # ------------------------------------------------------------
+        # Colonne 4 : ILDA (export + preview)
+        # ------------------------------------------------------------
         col4_layout = QVBoxLayout()
+        col4_layout.setAlignment(Qt.AlignTop)
+
         group_step4 = QGroupBox("4. ILDA (export)")
         step4_layout = QVBoxLayout(group_step4)
+
+        # Profil ILDA : historique vs arcade
+        row_ilda_mode = QHBoxLayout()
+        lbl_ilda_mode = QLabel("Profil :")
+        self.combo_ilda_mode = QComboBox()
+        self.combo_ilda_mode.addItem("Classique (noir & blanc)", "classic")
+        self.combo_ilda_mode.addItem("Arcade (expérimental)", "arcade")
+        self.combo_ilda_mode.setCurrentIndex(0)
+        row_ilda_mode.addWidget(lbl_ilda_mode)
+        row_ilda_mode.addWidget(self.combo_ilda_mode)
+        step4_layout.addLayout(row_ilda_mode)
+
         self.btn_ilda = QPushButton("Exporter ILDA")
         self.btn_ilda.clicked.connect(self.on_export_ilda_click)
         step4_layout.addWidget(self.btn_ilda)
         step4_layout.addStretch()
         col4_layout.addWidget(group_step4)
 
-        group_prev4 = QGroupBox("Prévisualisation ILDA (fichier .ild)")
+        group_prev4 = QGroupBox("Prévisualisation ILDA (PNG)")
         prev4_layout = QVBoxLayout(group_prev4)
         self.preview_ilda = RasterPreview()
         self.preview_ilda.setMinimumSize(240, 180)
@@ -226,6 +255,7 @@ class MainWindow(QMainWindow):
         col4_widget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
         cols_layout.addWidget(col4_widget)
 
+        # Intégration des 4 colonnes dans le groupbox pipeline
         pipeline_layout.addLayout(cols_layout)
         main_layout.addWidget(group_pipeline)
 
@@ -252,10 +282,8 @@ class MainWindow(QMainWindow):
     def log(self, text: str) -> None:
         ts = datetime.now().strftime("[%H:%M:%S]")
         self.log_view.append(f"{ts} {text}")
-        # Auto-scroll vers la dernière ligne
         self.log_view.moveCursor(QTextCursor.End)
         self.log_view.ensureCursorVisible()
-
 
     def set_busy(self, busy: bool) -> None:
         if busy:
@@ -328,17 +356,14 @@ class MainWindow(QMainWindow):
         elif step_name == "potrace":
             self.preview_svg.show_svg(path_str)
         elif step_name == "ilda":
-            # Désormais on reçoit un PNG généré depuis le fichier .ild
+            # PNG généré pour visualiser le résultat ILDA
             self.preview_ilda.show_image(path_str)
-
 
     # ------------------------------------------------------------------
     # Callbacks UI
     # ------------------------------------------------------------------
 
     def choose_video(self) -> None:
-        from PySide6.QtWidgets import QFileDialog
-
         path, _ = QFileDialog.getOpenFileName(
             self,
             "Choisir une vidéo",
@@ -373,7 +398,7 @@ class MainWindow(QMainWindow):
         fps = self.spin_fps.value()
 
         if not video:
-            self.log("Erreur FFmpeg : aucun fichier vidéo sélectionnée.")
+            self.log("Erreur FFmpeg : aucun fichier vidéo sélectionné.")
             return
         if not project:
             self.log("Erreur FFmpeg : nom de projet vide.")
@@ -429,9 +454,21 @@ class MainWindow(QMainWindow):
             self.log("Erreur ILDA : nom de projet vide.")
             return
 
-        self.log(f"[ILDA] Export ILDA pour le projet '{project}' (pipeline)…")
-        # Nécessite que PipelineController expose start_ilda(project)
-        self.pipeline.start_ilda(project)
+        # Profil sélectionné dans la combo (mode logique transmis au pipeline).
+        if hasattr(self, "combo_ilda_mode"):
+            mode_key = self.combo_ilda_mode.currentData() or "classic"
+            mode_label = self.combo_ilda_mode.currentText()
+        else:
+            # Fallback défensif : comportement historique.
+            mode_key = "classic"
+            mode_label = "Classique (fallback)"
+
+        self.log(
+            f"[ILDA] Export ILDA pour le projet '{project}' "
+            f"(profil={mode_label})…"
+        )
+        # PipelineController doit exposer start_ilda(project, ilda_mode=…)
+        self.pipeline.start_ilda(project, ilda_mode=mode_key)
 
     # ------------------------------------------------------------------
     # Helpers et preview manuelle
@@ -441,8 +478,8 @@ class MainWindow(QMainWindow):
         """
         Met à jour la prévisualisation ILDA après un export.
 
-        On ne rasterise toujours pas directement le .ild, donc on affiche
-        la première frame SVG comme approximation de la sortie ILDA.
+        On affiche la première frame SVG comme approximation,
+        et une image PNG si elle existe dans le dossier preview/.
         """
         project_root = PROJECTS_ROOT / project
         svg_dir = project_root / "svg"
@@ -454,7 +491,6 @@ class MainWindow(QMainWindow):
         else:
             self.log("[Preview] Aucune frame SVG trouvée pour la preview.")
 
-        # Preview ILDA seulement si une image a déjà été générée
         ilda_preview_png = project_root / "preview" / "ilda_preview.png"
         if ilda_preview_png.exists():
             self.preview_ilda.show_image(str(ilda_preview_png))
@@ -465,8 +501,8 @@ class MainWindow(QMainWindow):
     def on_preview_frame(self) -> None:
         """
         Prévisualise une frame donnée (index dans self.spin_frame)
-        pour les trois étapes intermédiaires : PNG, BMP, SVG,
-        et tente aussi une preview ILDA pour la même frame.
+        pour PNG, BMP, SVG, et tente aussi une preview ILDA pour
+        la même frame si un fichier .ild est présent.
         """
         project = (self.edit_project.text() or "").strip()
         if not project:
@@ -504,7 +540,7 @@ class MainWindow(QMainWindow):
                 preview_dir.mkdir(parents=True, exist_ok=True)
                 ilda_png = preview_dir / f"ilda_preview_{frame_index:04d}.png"
 
-                # frame_index (spin) est 1-based ; les frames ILDA sont 0-based.
+                # frame_index (spin) est 1-based ; frames ILDA 0-based.
                 render_ilda_preview(
                     ilda_path,
                     ilda_png,
@@ -526,18 +562,11 @@ class MainWindow(QMainWindow):
 
     def on_cancel_task(self) -> None:
         """
-        Appelé quand l'utilisateur clique sur
-        « Annuler la tâche en cours ».
-
-        Demande simplement au PipelineController d'annuler
-        le step en cours (s'il y en a un).
+        Appelé quand l'utilisateur clique sur « Annuler la tâche en cours ».
+        Demande au PipelineController d'annuler le step en cours.
         """
-        # On désactive le bouton tout de suite pour éviter les doubles clics.
         self.btn_cancel_task.setEnabled(False)
-
-        # `self.pipeline` est l'instance de PipelineController créée dans __init__
         self.pipeline.cancel_current_step()
-
 
     # ------------------------------------------------------------------
     # Helpers pour trouver la "dernière" ou "première" frame d'un dossier
