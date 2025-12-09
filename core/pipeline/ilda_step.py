@@ -1,203 +1,287 @@
 # core/pipeline/ilda_step.py
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional, Callable, List
+from typing import Callable, Optional
 
 from core.config import PROJECTS_ROOT
-from .base import FrameProgress, StepResult, ProgressCallback, CancelCallback
+from core.pipeline.base import FrameProgress, StepResult
 from core.step_ilda import export_project_to_ilda
-from core.ilda_preview import render_ilda_preview
 
+
+# ---------------------------------------------------------------------------
+# Configuration "debug"
+# ---------------------------------------------------------------------------
+
+# Quand True, on ajoute au message final un listing du nombre de points ILDA
+# par frame (en lisant le fichier .ild généré).
+#
+# Par défaut on laisse à False pour éviter de flooder le log avec des centaines
+# de lignes. Pour déboguer, tu peux temporairement le passer à True.
+DEBUG_LOG_POINTS_PER_FRAME: bool = False
+
+
+# ---------------------------------------------------------------------------
+# Petites structures d'aide internes
+# ---------------------------------------------------------------------------
+
+@dataclass
+class IldaExportConfig:
+    """Paramètres effectifs passés au core d'export ILDA."""
+
+    mode: str
+    fit_axis: str
+    fill_ratio: float
+    min_rel_size: float
+    remove_outer_frame: bool
+    frame_margin_rel: float
+
+
+def _normalise_mode(raw_mode: Optional[str]) -> str:
+    """
+    Normalise la chaîne de mode en 'classic' ou 'arcade'.
+
+    Toute valeur inconnue retombe sur 'classic' pour rester robuste.
+    """
+    if not raw_mode:
+        return "classic"
+
+    m = raw_mode.strip().lower()
+    if m == "arcade":
+        return "arcade"
+    return "classic"
+
+
+def _build_config(
+    fit_axis: str,
+    fill_ratio: float,
+    min_rel_size: float,
+    raw_mode: Optional[str],
+) -> IldaExportConfig:
+    """
+    Construit la config d'export à partir des paramètres du pipeline.
+
+    - `classic` : comportement historique (pas de changement intentionnel).
+    - `arcade`  : profil expérimental, avec filtrage de cadre un peu plus
+                  agressif via `frame_margin_rel`.
+    """
+
+    mode = _normalise_mode(raw_mode)
+
+    # Sécurisation minimale des paramètres numériques
+    fit_axis_norm = fit_axis if fit_axis in ("min", "max") else "max"
+    fill_ratio_clamped = max(0.1, min(float(fill_ratio), 1.0))
+    min_rel_size_clamped = max(0.0, min(float(min_rel_size), 1.0))
+
+    if mode == "classic":
+        # Profil historique : on reste assez conservateur
+        remove_outer_frame = True
+        frame_margin_rel = 0.02
+    else:
+        # Mode "arcade" : filtrage de cadre un peu plus large
+        remove_outer_frame = True
+        frame_margin_rel = 0.05
+
+    return IldaExportConfig(
+        mode=mode,
+        fit_axis=fit_axis_norm,
+        fill_ratio=fill_ratio_clamped,
+        min_rel_size=min_rel_size_clamped,
+        remove_outer_frame=remove_outer_frame,
+        frame_margin_rel=frame_margin_rel,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Lecture légère des headers ILDA pour compter les points par frame
+# ---------------------------------------------------------------------------
+
+def _read_points_per_frame(ilda_path: Path) -> list[int]:
+    """
+    Lis le fichier ILDA et renvoie une liste [n_points_frame0, n_points_frame1, ...].
+
+    On s'appuie sur le header ILDA standard :
+    - octets 0..3  : b"ILDA"
+    - octet 7      : format code
+    - octets 24..25: nombre de "records" (big-endian)
+
+    Pour les formats 0 et 1, chaque record est un point (8 octets).
+    Pour les palettes (2 et 3), on ne fait que sauter les données.
+    """
+    points: list[int] = []
+
+    try:
+        with ilda_path.open("rb") as f:
+            while True:
+                header = f.read(32)
+                if len(header) < 32:
+                    break
+
+                if header[0:4] != b"ILDA":
+                    # Header inattendu → on arrête proprement.
+                    break
+
+                fmt = header[7]
+                num_records = int.from_bytes(header[24:26], "big", signed=False)
+
+                if fmt in (0, 1):
+                    # Frame 3D/2D → chaque record correspond à un point
+                    points.append(num_records)
+                    record_size = 8
+                elif fmt in (2, 3):
+                    # Palette → on ne compte pas comme frame d'affichage
+                    record_size = 3
+                else:
+                    # Format inconnu : on sort sans tout casser.
+                    break
+
+                # On saute les données de la frame/palette
+                if num_records > 0 and record_size > 0:
+                    f.seek(num_records * record_size, 1)
+    except Exception:
+        # En cas de souci de lecture, on renvoie simplement ce qu'on a pu lire
+        pass
+
+    return points
+
+
+# ---------------------------------------------------------------------------
+# Fonction appelée par le PipelineController
+# ---------------------------------------------------------------------------
 
 def run_ilda_step(
     project_name: str,
+    fit_axis: str,
+    fill_ratio: float,
+    min_rel_size: float,
+    ilda_mode: str,
     *,
-    fit_axis: str = "max",
-    fill_ratio: float = 0.95,
-    min_rel_size: float = 0.01,
-    mode_normalised: Optional[str] = None,
-    remove_outer_frame: bool = True,
-    frame_margin_rel: float = 0.02,
-    progress_cb: ProgressCallback = None,
-    cancel_cb: CancelCallback = None,
+    progress_cb: Optional[Callable[[FrameProgress], None]] = None,
+    cancel_cb: Optional[Callable[[], bool]] = None,
 ) -> StepResult:
     """
-    Exécute le step ILDA pour un projet donné.
+    Step pipeline : export SVG -> ILDA.
 
-    Cette fonction est appelée par le contrôleur de pipeline (PipelineController)
-    dans le thread de travail, via StepWorker.
-
-    Paramètres
-    ----------
-    project_name:
-        Nom du projet (sous-dossier de PROJECTS_ROOT).
-        Par ex. "projet_demo".
-
-    fit_axis:
-        Contrôle la manière de remplir la fenêtre ILDA.
-        - "max" (par défaut) : on remplit l'axe le plus contraignant (max span).
-        - "min"              : on remplit selon le plus petit span (image moins zoomée).
-        - "x"                : on se base sur l'étendue en X.
-        - "y"                : on se base sur l'étendue en Y.
-
-    fill_ratio:
-        Ratio (0.0 – 1.0) de la plage ILDA utilisée.
-        Avec 0.95, on laisse une petite marge pour éviter de clipper sur les bords.
-
-    min_rel_size:
-        Taille relative minimale pour garder un chemin SVG.
-        Les chemins dont la taille (largeur/hauteur max) est inférieure à
-        `min_rel_size * global_span` sont considérés comme des artefacts et supprimés.
-
-    mode_normalised:
-        Mode de normalisation ILDA (actuellement symbolique).
-        - None ou "classic" : comportement standard.
-        - "arcade"          : préfigure un mode d'export orienté jeux/arcade
-                              (gestion avancée des couleurs, etc.).
-        Pour l'instant, le mode est surtout documenté dans le message final
-        et préparé pour de futures évolutions.
-
-    remove_outer_frame:
-        Si True, tente de détecter et supprimer les grands chemins qui
-        correspondent au cadre extérieur (bien adapté à La Linea).
-
-    frame_margin_rel:
-        Tolérance relative pour la détection du cadre extérieur.
-
-    progress_cb:
-        Callback optionnel pour signaler une mise à jour de progression.
-        Signature : (FrameProgress) -> None
-
-    cancel_cb:
-        Callback optionnel pour tester si l'utilisateur a demandé l'annulation.
-        Signature : () -> bool
-
-    Retour
-    ------
-    StepResult
-        - success: bool
-        - message: str
-        - output_dir: Path | None
-          (dossier contenant le .ild, typiquement PROJECTS_ROOT/project_name/ilda)
+    Cette fonction est appelée en thread par le `PipelineController`. Elle
+    s'occupe surtout de :
+      - préparer les chemins,
+      - adapter les paramètres (fit_axis, min_rel_size, mode, filtrage de cadre),
+      - relayer la progression vers le GUI,
+      - produire un StepResult pour le log final,
+      - et éventuellement ajouter un log détaillé du nombre de points par frame.
     """
-    step_name = "ilda"
+    project_root = PROJECTS_ROOT / project_name
+    svg_dir = project_root / "svg"
+    ilda_dir = project_root / "ilda"
+    ilda_dir.mkdir(parents=True, exist_ok=True)
+    out_path = ilda_dir / f"{project_name}.ild"
 
-    def _raise_if_cancelled() -> None:
-        if cancel_cb is not None and cancel_cb():
-            # On lève une exception pour interrompre proprement le step.
-            raise RuntimeError("Step ILDA annulé par l'utilisateur.")
+    # ----------------------------------------
+    # Préparation des paramètres d'export
+    # ----------------------------------------
+    cfg = _build_config(
+        fit_axis=fit_axis,
+        fill_ratio=fill_ratio,
+        min_rel_size=min_rel_size,
+        raw_mode=ilda_mode,
+    )
 
-    # Petite fonction utilitaire pour signaler la progression (en pourcentage).
-    def _report_progress_percent(pct: int, message: str | None = None) -> None:
+    # On compte les SVG pour donner une idée du total au GUI (progress bar)
+    try:
+        total_frames = len(sorted(svg_dir.glob("*.svg")))
+    except Exception:
+        total_frames = None
+
+    # ----------------------------------------
+    # Fonctions de callback pour le core
+    # ----------------------------------------
+
+    def _report_progress(pct: int) -> None:
+        """
+        Bridge entre la progression entière [0..100] du core ILDA
+        et l'objet FrameProgress attendu par le GUI.
+        """
         if progress_cb is None:
             return
-        # On borne pct dans [0, 100]
-        pct_clamped = max(0, min(100, int(pct)))
 
-        progress_cb(
-            FrameProgress(
-                step_name=step_name,
-                message=message or f"Export ILDA : {pct_clamped}%",
-                frame_index=pct_clamped,
-                total_frames=100,
-                frame_path=None,
-            )
+        if total_frames and total_frames > 0:
+            # On approxime l'index de frame à partir du pourcentage.
+            # Cela suffit pour la barre de progression.
+            frame_index = int(pct * total_frames / 100.0) - 1
+            if frame_index < 0:
+                frame_index = 0
+            if frame_index >= total_frames:
+                frame_index = total_frames - 1
+            tf = total_frames
+        else:
+            # Fallback : progression purement "indéterminée"
+            frame_index = max(pct - 1, 0)
+            tf = 100
+
+        fp = FrameProgress(
+            step_name="ilda",
+            message="",
+            frame_index=frame_index,
+            total_frames=tf,
+            frame_path=None,   # pas de preview frame par frame pendant l'export
         )
+        progress_cb(fp)
 
-    try:
-        _raise_if_cancelled()
+    def _check_cancel() -> bool:
+        """
+        Bridge pour la demande d'annulation depuis le GUI.
+        """
+        return bool(cancel_cb and cancel_cb())
 
-        # ------------------------------------------------------------------
-        # 1) Export ILDA via la fonction de core.step_ilda
-        # ------------------------------------------------------------------
-        def check_cancel_inner() -> bool:
-            if cancel_cb is None:
-                return False
-            return bool(cancel_cb())
-
-        def report_progress_inner(pct: int) -> None:
-            _report_progress_percent(
-                pct,
-                message=f"Export ILDA en cours... ({pct}%)",
-            )
-
-        _report_progress_percent(0, "Préparation de l'export ILDA...")
-
-        out_path = export_project_to_ilda(
-            project_name=project_name,
-            fit_axis=fit_axis,
-            fill_ratio=fill_ratio,
-            min_rel_size=min_rel_size,
-            remove_outer_frame=remove_outer_frame,
-            frame_margin_rel=frame_margin_rel,
-            check_cancel=check_cancel_inner,
-            report_progress=report_progress_inner,
-        )
-
-        _raise_if_cancelled()
-        _report_progress_percent(90, "Génération de la prévisualisation ILDA...")
-
-        # ------------------------------------------------------------------
-        # 2) Génération d'une prévisualisation ILDA (PNG) pour la GUI
-        # ------------------------------------------------------------------
-        project_root = PROJECTS_ROOT / project_name
-        preview_dir = project_root / "preview"
-        preview_dir.mkdir(parents=True, exist_ok=True)
-
-        preview_png = preview_dir / "ilda_preview.png"
-
-        try:
-            render_ilda_preview(
-                ilda_path=out_path,
-                out_png=preview_png,
-                frame_index=0,
-            )
-        except Exception as e_preview:
-            # On ne bloque pas l'export ILDA lui-même si la preview échoue.
-            if progress_cb is not None:
-                progress_cb(
-                    FrameProgress(
-                        step_name=step_name,
-                        message=f"Export OK, mais erreur lors de la prévisualisation ILDA : {e_preview}",
-                        frame_index=0,
-                        total_frames=None,
-                        frame_path=None,
-                    )
-                )
-            return StepResult(success=False, message=str(e_preview), output_dir=out_path.parent)
-
-        _report_progress_percent(100, "Export ILDA terminé.")
-
-    except Exception as exc:
-        # En cas d'erreur ou d'annulation, on retourne un StepResult en échec.
-        msg = f"Erreur lors de l'export ILDA : {exc}"
-        if progress_cb is not None:
-            progress_cb(
-                FrameProgress(
-                    step_name=step_name,
-                    message=msg,
-                    frame_index=0,
-                    total_frames=None,
-                    frame_path=None,
-                )
-            )
-        return StepResult(success=False, message=msg, output_dir=None)
-
-    # Si on arrive ici, tout s'est bien passé
-    msg = (
-        f"Fichier ILDA généré : {out_path.name} "
-        f"(mode={mode_normalised or 'classic'})"
+    # ----------------------------------------
+    # Appel au core d'export ILDA
+    # ----------------------------------------
+    ok = export_project_to_ilda(
+        project_root=project_root,
+        output_path=out_path,
+        mode=cfg.mode,
+        fit_axis=cfg.fit_axis,
+        fill_ratio=cfg.fill_ratio,
+        min_rel_size=cfg.min_rel_size,
+        remove_outer_frame=cfg.remove_outer_frame,
+        frame_margin_rel=cfg.frame_margin_rel,
+        progress_cb=_report_progress,
+        cancel_cb=_check_cancel,
     )
-    if progress_cb is not None:
-        progress_cb(
-            FrameProgress(
-                step_name=step_name,
-                message=msg,
-                frame_index=100,
-                total_frames=100,
-                frame_path=None,
-            )
+
+    if not ok:
+        return StepResult(
+            success=False,
+            message="Erreur lors de l'export ILDA (voir logs précédents).",
+            output_dir=ilda_dir,
         )
 
-    return StepResult(success=True, message=msg, output_dir=out_path.parent)
+    # ----------------------------------------
+    # Log optionnel : nombre de points par frame
+    # ----------------------------------------
+    debug_lines: list[str] = []
+    if DEBUG_LOG_POINTS_PER_FRAME and out_path.exists():
+        frame_points = _read_points_per_frame(out_path)
+        if frame_points:
+            debug_lines.append("Densité de points par frame :")
+            for idx, n in enumerate(frame_points):
+                debug_lines.append(f"  Frame {idx + 1:04d} : {n} points")
+        else:
+            debug_lines.append(
+                "Impossible de lire le nombre de points par frame "
+                "(format ILDA inattendu ou fichier vide)."
+            )
+
+    mode_label = cfg.mode
+    base_msg = f"Fichier ILDA généré : {out_path.name} (mode={mode_label})"
+    if debug_lines:
+        message = base_msg + "\n" + "\n".join(debug_lines)
+    else:
+        message = base_msg
+
+    return StepResult(
+        success=True,
+        message=message,
+        output_dir=ilda_dir,
+    )
