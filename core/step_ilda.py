@@ -134,19 +134,11 @@ def _mark_outer_frame_paths(
     frame_margin_rel: float,
 ) -> None:
     """
-    Marque les chemins correspondant au *cadre extérieur*.
+    Ancienne logique de détection du cadre au niveau SVG.
 
-    Deux niveaux d'heuristique :
-
-    1) Niveau global (héritage de l'ancienne version) :
-       - chemins dont la bbox colle à la bbox globale sur X/Y
-         (avec une tolérance `frame_margin_rel`).
-
-    2) Niveau par frame :
-       - détection de segments très fins qui longent un bord de la
-         bbox de la frame (haut/bas/gauche/droite), et qui couvrent
-         presque toute la largeur ou la hauteur.
-       - typiquement : les 4 côtés du cadre généré par Potrace.
+    Actuellement, nous ne l'utilisons plus (voir export_project_to_ilda) pour
+    éviter les faux positifs qui vidaient certaines frames. La suppression du
+    cadre se fait au niveau ILDA.
     """
     gx0, gx1, gy0, gy1 = global_bbox
     span_x = gx1 - gx0
@@ -154,106 +146,18 @@ def _mark_outer_frame_paths(
     if span_x <= 0 or span_y <= 0:
         return
 
-    tol_x_global = span_x * frame_margin_rel
-    tol_y_global = span_y * frame_margin_rel
-    global_area = span_x * span_y
+    tol_x = span_x * frame_margin_rel
+    tol_y = span_y * frame_margin_rel
 
-    # Seuils internes globaux (conservateurs).
-    coverage_threshold_global = 0.9
-    span_ratio_threshold_global = 0.8
-
-    # -----------------------------------------------------------------
-    # 1) Premier passage : détection globale (ancienne logique
-    #    + couverture de surface).
-    # -----------------------------------------------------------------
     for frame_paths in frames_paths:
         for pd in frame_paths:
             x0, x1, y0, y1 = pd.bbox
-            w = x1 - x0
-            h = y1 - y0
-            if w <= 0 or h <= 0:
-                continue
-
-            tight_match = (
-                abs(x0 - gx0) <= tol_x_global
-                and abs(x1 - gx1) <= tol_x_global
-                and abs(y0 - gy0) <= tol_y_global
-                and abs(y1 - gy1) <= tol_y_global
-            )
-
-            coverage = (w * h) / global_area if global_area > 0 else 0.0
-            span_ratio_x = w / span_x if span_x > 0 else 0.0
-            span_ratio_y = h / span_y if span_y > 0 else 0.0
-
-            looks_like_outer_frame = (
-                coverage >= coverage_threshold_global
-                and span_ratio_x >= span_ratio_threshold_global
-                and span_ratio_y >= span_ratio_threshold_global
-            )
-
-            if tight_match or looks_like_outer_frame:
-                pd.is_outer_frame = True
-
-    # -----------------------------------------------------------------
-    # 2) Deuxième passage : heuristique par frame pour les côtés fins
-    #    du cadre (haut, bas, gauche, droite).
-    # -----------------------------------------------------------------
-    border_span_threshold = 0.95   # couvre ≥ 95 % de la largeur/hauteur
-    thickness_threshold = 0.12     # épaisseur ≤ 12 % de la dimension
-
-    for frame_paths in frames_paths:
-        if not frame_paths:
-            continue
-
-        # bbox de la frame (en incluant tout, même ce qui sera peut-être
-        # marqué comme cadre) :
-        frame_bboxes = [pd.bbox for pd in frame_paths]
-        fx0, fx1, fy0, fy1 = _combine_bbox(frame_bboxes)
-        fspan_x = fx1 - fx0
-        fspan_y = fy1 - fy0
-        if fspan_x <= 0 or fspan_y <= 0:
-            continue
-
-        edge_tol_x = fspan_x * frame_margin_rel
-        edge_tol_y = fspan_y * frame_margin_rel
-
-        for pd in frame_paths:
-            if pd.is_outer_frame:
-                # Déjà qualifié de cadre par la logique globale
-                continue
-
-            x0, x1, y0, y1 = pd.bbox
-            w = x1 - x0
-            h = y1 - y0
-            if w <= 0 or h <= 0:
-                continue
-
-            rel_w = w / fspan_x if fspan_x > 0 else 0.0
-            rel_h = h / fspan_y if fspan_y > 0 else 0.0
-
-            # Contact avec les bords de la frame
-            near_left = abs(x0 - fx0) <= edge_tol_x
-            near_right = abs(x1 - fx1) <= edge_tol_x
-            near_bottom = abs(y0 - fy0) <= edge_tol_y
-            near_top = abs(y1 - fy1) <= edge_tol_y
-
-            is_horizontal_border = (
-                rel_w >= border_span_threshold
-                and rel_h <= thickness_threshold
-                and near_left
-                and near_right
-                and (near_bottom or near_top)
-            )
-
-            is_vertical_border = (
-                rel_h >= border_span_threshold
-                and rel_w <= thickness_threshold
-                and near_top
-                and near_bottom
-                and (near_left or near_right)
-            )
-
-            if is_horizontal_border or is_vertical_border:
+            if (
+                abs(x0 - gx0) <= tol_x
+                and abs(x1 - gx1) <= tol_x
+                and abs(y0 - gy0) <= tol_y
+                and abs(y1 - gy1) <= tol_y
+            ):
                 pd.is_outer_frame = True
 
 
@@ -425,7 +329,7 @@ def export_project_to_ilda(
     - fit_axis          : "max", "min", "x", "y" (axe de référence pour le zoom)
     - fill_ratio        : ratio de remplissage de la fenêtre ILDA globale
     - min_rel_size      : taille relative minimale pour garder un chemin
-    - remove_outer_frame: si True, essaie de supprimer le "cadre"
+    - remove_outer_frame: si True, essaie de supprimer le "cadre" (au niveau ILDA)
     - frame_margin_rel  : tolérance pour la détection de cadre
     - check_cancel      : callback d'annulation
     - report_progress   : callback de progression prenant l’index de frame (0-based)
@@ -467,27 +371,11 @@ def export_project_to_ilda(
     global_bbox_initial = _combine_bbox(all_bboxes)
 
     # --------------------------------------------------------------
-    # 2) Optionnel : détection / suppression du cadre extérieur (niveau SVG)
+    # 2) Pour l'instant : PAS de suppression de cadre au niveau SVG.
+    #    On utilise directement la bbox initiale pour la normalisation.
+    #    Le nettoyage de cadre se fait au niveau ILDA ensuite.
     # --------------------------------------------------------------
-    if remove_outer_frame:
-        _mark_outer_frame_paths(frames_paths, global_bbox_initial, frame_margin_rel)
-        filtered_bboxes: List[Tuple[float, float, float, float]] = [
-            pd.bbox
-            for frame_paths in frames_paths
-            for pd in frame_paths
-            if not pd.is_outer_frame
-        ]
-        if filtered_bboxes:
-            global_bbox = _combine_bbox(filtered_bboxes)
-        else:
-            # Sécurité : si on a tout viré, on annule le marquage
-            # et on revient à la bbox initiale.
-            for frame_paths in frames_paths:
-                for pd in frame_paths:
-                    pd.is_outer_frame = False
-            global_bbox = global_bbox_initial
-    else:
-        global_bbox = global_bbox_initial
+    global_bbox = global_bbox_initial
 
     normalizer = _make_normalizer(global_bbox, fit_axis=fit_axis, fill_ratio=fill_ratio)
 
@@ -512,91 +400,13 @@ def export_project_to_ilda(
 
         for pd in frame_paths:
             if pd.is_outer_frame:
+                # En pratique, is_outer_frame sera toujours False avec la
+                # stratégie actuelle, mais on garde le test par sécurité.
                 continue
 
             x0, x1, y0, y1 = pd.bbox
             w = x1 - x0
             h = y1 - y0
             rel_size = max(w, h) / global_span if global_span > 0 else 1.0
-            if rel_size < min_rel_size:
-                # Petit parasite → on ignore
-                continue
 
-            pts = pd.points
-            if not pts:
-                continue
-
-            # Conversion des points en coordonnées ILDA
-            ilda_coords = [normalizer(x, y) for (x, y) in pts]
-
-            # Premier point blanked = déplacement sans trace
-            first_x, first_y = ilda_coords[0]
-            ilda_points.append(
-                IldaPoint(
-                    x=first_x,
-                    y=first_y,
-                    z=0,
-                    blanked=True,
-                    color_index=profile.base_color_index,
-                )
-            )
-
-            # Points lumineux
-            for x, y in ilda_coords[1:]:
-                ilda_points.append(
-                    IldaPoint(
-                        x=x,
-                        y=y,
-                        z=0,
-                        blanked=False,
-                        color_index=profile.base_color_index,
-                    )
-                )
-
-        # Si aucun point, on crée un point blanked central (frame noire).
-        if not ilda_points:
-            ilda_points.append(
-                IldaPoint(
-                    x=0,
-                    y=0,
-                    z=0,
-                    blanked=True,
-                    color_index=profile.base_color_index,
-                )
-            )
-
-        frame = IldaFrame(
-            name=f"F{idx:04d}",
-            company="LPIP",
-            points=ilda_points,
-            projector=0,
-        )
-        frames.append(frame)
-
-        if report_progress is not None:
-            report_progress(idx)
-
-    # --------------------------------------------------------------
-    # 4) Nettoyage ILDA du cadre + sécurité "au moins 1 point"
-    # --------------------------------------------------------------
-    if remove_outer_frame:
-        _remove_outer_rectangle_from_ilda_frames(frames, frame_margin_rel)
-
-    for frame in frames:
-        if not frame.points:
-            frame.points.append(
-                IldaPoint(
-                    x=0,
-                    y=0,
-                    z=0,
-                    blanked=True,
-                    color_index=profile.base_color_index,
-                )
-            )
-
-    # --------------------------------------------------------------
-    # 5) Écriture du fichier ILDA
-    # --------------------------------------------------------------
-    out_path = ilda_dir / f"{project_name}.ild"
-    write_ilda_file(out_path, frames)
-    return out_path
+            # Filtrage par taille relative
