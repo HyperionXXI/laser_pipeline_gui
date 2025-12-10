@@ -13,7 +13,7 @@ from .ilda_writer import (
     IldaPoint,
     IldaFrame,
     write_ilda_file,
-    write_demo_square,  # conserve pour compat éventuelle
+    write_demo_square,  # conservé pour compat éventuelle
 )
 from .ilda_profiles import IldaProfile, get_ilda_profile
 
@@ -42,11 +42,12 @@ class _PathData:
 # Utilitaires géométriques / SVG
 # =====================================================================
 
+
 def _path_to_polyline(path, samples_per_curve: int = 24) -> List[Tuple[float, float]]:
     """
     Convertit un svgpathtools.Path en liste de points (x, y).
 
-    - Segments de type Line : on prend juste start et end.
+    - Segments de type Line : on prend start et end.
     - Autres segments (courbes) : on échantillonne `samples_per_curve` points.
     """
     pts: List[Tuple[float, float]] = []
@@ -216,6 +217,7 @@ def _make_normalizer(
 # API principale : export ILDA
 # =====================================================================
 
+
 def export_project_to_ilda(
     project_name: str,
     fit_axis: str = "max",
@@ -238,13 +240,11 @@ def export_project_to_ilda(
     - remove_outer_frame: si True, essaie de supprimer le "cadre"
     - frame_margin_rel  : tolérance pour la détection de cadre
     - check_cancel      : callback d'annulation
-    - report_progress   : callback de progression (0–100)
+    - report_progress   : callback de progression prenant l’index de frame (0-based)
     - mode              : nom du profil ILDA ("classic", "arcade", ...)
-                          Pour l’instant, le profil est surtout utilisé pour
-                          centraliser la couleur par défaut, sans changer le
-                          comportement géométrique existant.
-    Le prototype reste compatible avec l’ancienne version pour éviter de
-    casser les appels existants.
+
+    Prototype compatible avec l’ancienne version pour éviter
+    de casser les appels existants.
     """
     project_root = PROJECTS_ROOT / project_name
     svg_dir = project_root / "svg"
@@ -363,6 +363,22 @@ def export_project_to_ilda(
                     )
                 )
 
+        # IMPORTANT :
+        # On ne supprime plus la frame quand elle ne contient aucun point.
+        # Pour conserver la continuité de l’animation, on génère un point
+        # unique "blanked" au centre. Visuellement : frame noire, mais la
+        # timeline ILDA garde le même nombre de frames.
+        if not ilda_points:
+            ilda_points.append(
+                IldaPoint(
+                    x=0,
+                    y=0,
+                    z=0,
+                    blanked=True,  # invisible
+                    color_index=profile.base_color_index,
+                )
+            )
+
         frame = IldaFrame(
             name=f"F{idx:04d}",
             company="LPIP",
@@ -371,9 +387,10 @@ def export_project_to_ilda(
         )
         frames.append(frame)
 
-        if report_progress is not None and total_frames > 0:
-            p = int((idx + 1) * 100 / total_frames)
-            report_progress(p)
+        if report_progress is not None:
+            # Le wrapper pipeline interprète ce paramètre comme un index
+            # de frame (0-based), pas un pourcentage.
+            report_progress(idx)
 
     # --------------------------------------------------------------
     # 4) Écriture du fichier ILDA

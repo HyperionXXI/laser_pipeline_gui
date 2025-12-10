@@ -1,4 +1,3 @@
-# core/pipeline/ilda_step.py
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -17,8 +16,8 @@ from core.step_ilda import export_project_to_ilda
 # Quand True, on ajoute au message final un listing du nombre de points ILDA
 # par frame (en lisant le fichier .ild généré).
 #
-# Par défaut on laisse à False pour éviter de flooder le log avec des centaines
-# de lignes. Pour déboguer, tu peux temporairement le passer à True.
+# Par défaut False pour ne pas flooder le log. Tu peux le passer à True
+# localement si tu veux inspecter la densité de points.
 DEBUG_LOG_POINTS_PER_FRAME: bool = False
 
 
@@ -29,7 +28,6 @@ DEBUG_LOG_POINTS_PER_FRAME: bool = False
 @dataclass
 class IldaExportConfig:
     """Paramètres effectifs passés au core d'export ILDA."""
-
     mode: str
     fit_axis: str
     fill_ratio: float
@@ -62,7 +60,7 @@ def _build_config(
     """
     Construit la config d'export à partir des paramètres du pipeline.
 
-    - `classic` : comportement historique (pas de changement intentionnel).
+    - `classic` : comportement historique (mais on supprime déjà le cadre).
     - `arcade`  : profil expérimental, avec filtrage de cadre un peu plus
                   agressif via `frame_margin_rel`.
     """
@@ -70,12 +68,12 @@ def _build_config(
     mode = _normalise_mode(raw_mode)
 
     # Sécurisation minimale des paramètres numériques
-    fit_axis_norm = fit_axis if fit_axis in ("min", "max") else "max"
+    fit_axis_norm = fit_axis if fit_axis in ("min", "max", "x", "y") else "max"
     fill_ratio_clamped = max(0.1, min(float(fill_ratio), 1.0))
     min_rel_size_clamped = max(0.0, min(float(min_rel_size), 1.0))
 
     if mode == "classic":
-        # Profil historique : on reste assez conservateur
+        # On essaie déjà de virer le cadre parasite
         remove_outer_frame = True
         frame_margin_rel = 0.02
     else:
@@ -163,8 +161,12 @@ def run_ilda_step(
     """
     Step pipeline : export SVG -> ILDA.
 
-    Cette fonction est appelée en thread par le `PipelineController`. Elle
-    s'occupe surtout de :
+    Signature compatible avec `PipelineController` :
+
+        run_ilda_step(project, fit_axis, fill_ratio, min_rel_size, ilda_mode,
+                      progress_cb=..., cancel_cb=...)
+
+    Cette fonction s'occupe surtout de :
       - préparer les chemins,
       - adapter les paramètres (fit_axis, min_rel_size, mode, filtrage de cadre),
       - relayer la progression vers le GUI,
@@ -175,7 +177,6 @@ def run_ilda_step(
     svg_dir = project_root / "svg"
     ilda_dir = project_root / "ilda"
     ilda_dir.mkdir(parents=True, exist_ok=True)
-    out_path = ilda_dir / f"{project_name}.ild"
 
     # ----------------------------------------
     # Préparation des paramètres d'export
@@ -189,7 +190,7 @@ def run_ilda_step(
 
     # On compte les SVG pour donner une idée du total au GUI (progress bar)
     try:
-        total_frames = len(sorted(svg_dir.glob("*.svg")))
+        total_frames = len(sorted(svg_dir.glob("frame_*.svg")))
     except Exception:
         total_frames = None
 
@@ -207,7 +208,6 @@ def run_ilda_step(
 
         if total_frames and total_frames > 0:
             # On approxime l'index de frame à partir du pourcentage.
-            # Cela suffit pour la barre de progression.
             frame_index = int(pct * total_frames / 100.0) - 1
             if frame_index < 0:
                 frame_index = 0
@@ -229,31 +229,36 @@ def run_ilda_step(
         progress_cb(fp)
 
     def _check_cancel() -> bool:
-        """
-        Bridge pour la demande d'annulation depuis le GUI.
-        """
+        """Bridge pour la demande d'annulation depuis le GUI."""
         return bool(cancel_cb and cancel_cb())
 
     # ----------------------------------------
     # Appel au core d'export ILDA
     # ----------------------------------------
-    ok = export_project_to_ilda(
-        project_root=project_root,
-        output_path=out_path,
-        mode=cfg.mode,
-        fit_axis=cfg.fit_axis,
-        fill_ratio=cfg.fill_ratio,
-        min_rel_size=cfg.min_rel_size,
-        remove_outer_frame=cfg.remove_outer_frame,
-        frame_margin_rel=cfg.frame_margin_rel,
-        progress_cb=_report_progress,
-        cancel_cb=_check_cancel,
-    )
-
-    if not ok:
+    try:
+        out_path = export_project_to_ilda(
+            project_name=project_name,
+            fit_axis=cfg.fit_axis,
+            fill_ratio=cfg.fill_ratio,
+            min_rel_size=cfg.min_rel_size,
+            remove_outer_frame=cfg.remove_outer_frame,
+            frame_margin_rel=cfg.frame_margin_rel,
+            check_cancel=_check_cancel,
+            report_progress=_report_progress,
+            mode=cfg.mode,
+        )
+    except Exception as e:
         return StepResult(
             success=False,
-            message="Erreur lors de l'export ILDA (voir logs précédents).",
+            message=f"Erreur lors de l'export ILDA : {e}",
+            output_dir=ilda_dir,
+        )
+
+    # Sécurité : on vérifie que le fichier a bien été créé
+    if not out_path or not isinstance(out_path, Path) or not out_path.exists():
+        return StepResult(
+            success=False,
+            message="Erreur lors de l'export ILDA (fichier .ild non généré).",
             output_dir=ilda_dir,
         )
 
@@ -261,7 +266,7 @@ def run_ilda_step(
     # Log optionnel : nombre de points par frame
     # ----------------------------------------
     debug_lines: list[str] = []
-    if DEBUG_LOG_POINTS_PER_FRAME and out_path.exists():
+    if DEBUG_LOG_POINTS_PER_FRAME:
         frame_points = _read_points_per_frame(out_path)
         if frame_points:
             debug_lines.append("Densité de points par frame :")
