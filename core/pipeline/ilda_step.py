@@ -25,6 +25,7 @@ DEBUG_LOG_POINTS_PER_FRAME: bool = False
 # Petites structures d'aide internes
 # ---------------------------------------------------------------------------
 
+
 @dataclass
 class IldaExportConfig:
     """Paramètres effectifs passés au core d'export ILDA."""
@@ -95,9 +96,11 @@ def _build_config(
 # Lecture légère des headers ILDA pour compter les points par frame
 # ---------------------------------------------------------------------------
 
+
 def _read_points_per_frame(ilda_path: Path) -> list[int]:
     """
-    Lis le fichier ILDA et renvoie une liste [n_points_frame0, n_points_frame1, ...].
+    Lis le fichier ILDA et renvoie une liste
+    [n_points_frame0, n_points_frame1, ...].
 
     On s'appuie sur le header ILDA standard :
     - octets 0..3  : b"ILDA"
@@ -121,7 +124,9 @@ def _read_points_per_frame(ilda_path: Path) -> list[int]:
                     break
 
                 fmt = header[7]
-                num_records = int.from_bytes(header[24:26], "big", signed=False)
+                num_records = int.from_bytes(
+                    header[24:26], "big", signed=False
+                )
 
                 if fmt in (0, 1):
                     # Frame 3D/2D → chaque record correspond à un point
@@ -147,6 +152,7 @@ def _read_points_per_frame(ilda_path: Path) -> list[int]:
 # ---------------------------------------------------------------------------
 # Fonction appelée par le PipelineController
 # ---------------------------------------------------------------------------
+
 
 def run_ilda_step(
     project_name: str,
