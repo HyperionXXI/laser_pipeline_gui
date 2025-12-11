@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Optional
 
 from PySide6.QtCore import Qt, Slot
-from PySide6.QtGui import QTextCursor
+from PySide6.QtGui import QTextCursor, QAction
 from PySide6.QtWidgets import (
     QApplication,
     QMainWindow,
@@ -25,6 +25,8 @@ from PySide6.QtWidgets import (
     QCheckBox,
     QSizePolicy,
     QProgressBar,
+    QInputDialog,
+    QMessageBox,
 )
 
 from core.config import PROJECTS_ROOT
@@ -38,6 +40,31 @@ class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
         self.setWindowTitle("Laser Pipeline GUI")
+
+        # --- Menu bar ---
+        menu = self.menuBar()
+
+        # File menu
+        file_menu = menu.addMenu("File")
+        open_action = QAction("Open Video...", self)
+        open_action.triggered.connect(self.choose_video)
+        file_menu.addAction(open_action)
+
+        exit_action = QAction("Exit", self)
+        exit_action.triggered.connect(self.close)
+        file_menu.addAction(exit_action)
+
+        # Project menu
+        proj_menu = menu.addMenu("Project")
+        new_proj_action = QAction("New Project...", self)
+        new_proj_action.triggered.connect(self.on_new_project)
+        proj_menu.addAction(new_proj_action)
+
+        # Help menu
+        help_menu = menu.addMenu("Help")
+        about_action = QAction("About", self)
+        about_action.triggered.connect(self.on_about)
+        help_menu.addAction(about_action)
 
         central = QWidget(self)
         self.setCentralWidget(central)
@@ -340,6 +367,37 @@ class MainWindow(QMainWindow):
         if path:
             self.edit_video_path.setText(path)
             self.log(f"Vidéo sélectionnée : {path}")
+
+    def on_new_project(self) -> None:
+        """Create a new project directory structure under `PROJECTS_ROOT`.
+
+        Prompts for a project name, creates subfolders and sets the project
+        name in the UI if successful.
+        """
+        name, ok = QInputDialog.getText(self, "Créer un projet", "Nom du projet:")
+        if not ok:
+            return
+        project = (name or "").strip()
+        if not project:
+            self.log("Erreur : nom de projet vide.")
+            return
+
+        project_root = PROJECTS_ROOT / project
+        subdirs = ["frames", "bmp", "svg", "ilda", "preview"]
+        try:
+            for d in subdirs:
+                (project_root / d).mkdir(parents=True, exist_ok=True)
+            self.edit_project.setText(project)
+            self.log(f"Projet créé : {project_root}")
+        except Exception as e:
+            self.log(f"Erreur création projet : {e}")
+
+    def on_about(self) -> None:
+        QMessageBox.about(
+            self,
+            "About Laser Pipeline GUI",
+            "Laser Pipeline GUI\n\nExperimental video → ILDA pipeline. See README.md for details.",
+        )
 
     def on_test_click(self) -> None:
         video = (self.edit_video_path.text() or "").strip()
