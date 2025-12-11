@@ -20,7 +20,6 @@ from .ilda_profiles import IldaProfile, get_ilda_profile
 ILDAPoint = IldaPoint
 ILDAFrame = IldaFrame
 
-
 # =====================================================================
 # Constantes & structures internes
 # =====================================================================
@@ -41,13 +40,15 @@ class _PathData:
 # Utilitaires géométriques / SVG
 # =====================================================================
 
-
-def _path_to_polyline(path, samples_per_curve: int = 24) -> List[Tuple[float, float]]:
+def _path_to_polyline(path, samples_per_curve: int = 64) -> List[Tuple[float, float]]:
     """
     Convertit un svgpathtools.Path en liste de points (x, y).
 
     - Segments de type Line : on prend start et end.
     - Autres segments (courbes) : on échantillonne `samples_per_curve` points.
+
+    On sur-échantillonne volontairement (64) pour limiter les effets de
+    "tremblement" et de segmentation trop grossière dans les éditeurs ILDA.
     """
     pts: List[Tuple[float, float]] = []
     first = True
@@ -128,17 +129,82 @@ def _combine_bbox(
     return min_x, max_x, min_y, max_y
 
 
-def _mark_outer_frame_paths(
+# =====================================================================
+# Détection du cadre au niveau SVG
+# =====================================================================
+
+def _is_rect_like_path(
+    pts: List[Tuple[float, float]],
+    bbox: Tuple[float, float, float, float],
+    tol_ratio: float = 0.02,
+    border_ratio_threshold: float = 0.8,
+) -> bool:
+    """
+    Heuristique : détermine si un chemin ressemble à un grand rectangle.
+
+    - `tol_ratio` détermine l'épaisseur acceptée des bords (en % de la taille).
+    - `border_ratio_threshold` est le pourcentage minimal de points qui doivent
+      se trouver sur un des 4 bords du rectangle approximatif.
+    """
+    if not pts:
+        return False
+
+    x0, x1, y0, y1 = bbox
+    span_x = x1 - x0
+    span_y = y1 - y0
+    if span_x <= 0 or span_y <= 0:
+        return False
+
+    tol_x = span_x * tol_ratio
+    tol_y = span_y * tol_ratio
+
+    # Classement des points par proximité d'un bord.
+    counts = {"left": 0, "right": 0, "bottom": 0, "top": 0}
+    border_points = 0
+
+    for x, y in pts:
+        on_left = abs(x - x0) <= tol_x
+        on_right = abs(x - x1) <= tol_x
+        on_bottom = abs(y - y0) <= tol_y
+        on_top = abs(y - y1) <= tol_y
+
+        if on_left:
+            counts["left"] += 1
+            border_points += 1
+        elif on_right:
+            counts["right"] += 1
+            border_points += 1
+        elif on_bottom:
+            counts["bottom"] += 1
+            border_points += 1
+        elif on_top:
+            counts["top"] += 1
+            border_points += 1
+
+    if border_points == 0:
+        return False
+
+    # Au moins une bonne couverture des 4 côtés.
+    if not all(counts[k] > 0 for k in ("left", "right", "bottom", "top")):
+        return False
+
+    if border_points / len(pts) < border_ratio_threshold:
+        return False
+
+    return True
+
+
+def _detect_outer_frame_paths(
     frames_paths: List[List[_PathData]],
     global_bbox: Tuple[float, float, float, float],
     frame_margin_rel: float,
 ) -> None:
     """
-    Ancienne logique de détection du cadre au niveau SVG.
+    Marque les chemins correspondant au *cadre extérieur*.
 
-    Actuellement, nous ne l'utilisons plus (voir export_project_to_ilda) pour
-    éviter les faux positifs qui vidaient certaines frames. La suppression du
-    cadre se fait au niveau ILDA.
+    Critère :
+      - bbox très proche de la bbox globale sur X/Y (avec tolérance),
+      - ET le chemin ressemble à un grand rectangle (voir _is_rect_like_path).
     """
     gx0, gx1, gy0, gy1 = global_bbox
     span_x = gx1 - gx0
@@ -158,101 +224,14 @@ def _mark_outer_frame_paths(
                 and abs(y0 - gy0) <= tol_y
                 and abs(y1 - gy1) <= tol_y
             ):
-                pd.is_outer_frame = True
+                # Candidat : bbox quasi pleine fenêtre
+                if _is_rect_like_path(pd.points, pd.bbox):
+                    pd.is_outer_frame = True
 
 
 # =====================================================================
-# Nettoyage du cadre au NIVEAU ILDA
+# Normalisation des coordonnées
 # =====================================================================
-
-def _remove_outer_rectangle_from_ilda_frames(
-    frames: List[IldaFrame],
-    frame_margin_rel: float,
-) -> None:
-    """
-    Post-traitement ILDA : supprime les points appartenant au grand
-    rectangle extérieur (cadre) si on détecte un rectangle complet.
-
-    - On travaille sur les coordonnées ILDA normalisées (x, y).
-    - On ne touche qu'aux frames qui présentent clairement un rectangle
-      couvrant presque toute la largeur ET toute la hauteur.
-    """
-    # 1) Bbox globale basée sur les points NON blanked
-    xs: List[int] = []
-    ys: List[int] = []
-    for frame in frames:
-        for p in frame.points:
-            if p.blanked:
-                continue
-            xs.append(p.x)
-            ys.append(p.y)
-
-    if not xs:
-        return
-
-    gx0 = min(xs)
-    gx1 = max(xs)
-    gy0 = min(ys)
-    gy1 = max(ys)
-    span_x = gx1 - gx0
-    span_y = gy1 - gy0
-    if span_x <= 0 or span_y <= 0:
-        return
-
-    tol_x = span_x * frame_margin_rel
-    tol_y = span_y * frame_margin_rel
-    border_span_threshold = 0.90  # ≥ 90 % de la largeur/hauteur
-
-    def _has_full_rectangle(points: List[IldaPoint]) -> bool:
-        bottom = [p for p in points if abs(p.y - gy0) <= tol_y]
-        top = [p for p in points if abs(p.y - gy1) <= tol_y]
-        left = [p for p in points if abs(p.x - gx0) <= tol_x]
-        right = [p for p in points if abs(p.x - gx1) <= tol_x]
-
-        if not (bottom and top and left and right):
-            return False
-
-        bx_min = min(p.x for p in bottom)
-        bx_max = max(p.x for p in bottom)
-        tx_min = min(p.x for p in top)
-        tx_max = max(p.x for p in top)
-        ly_min = min(p.y for p in left)
-        ly_max = max(p.y for p in left)
-        ry_min = min(p.y for p in right)
-        ry_max = max(p.y for p in right)
-
-        horiz_ok = (
-            (bx_max - bx_min) >= span_x * border_span_threshold
-            and (tx_max - tx_min) >= span_x * border_span_threshold
-        )
-        vert_ok = (
-            (ly_max - ly_min) >= span_y * border_span_threshold
-            and (ry_max - ry_min) >= span_y * border_span_threshold
-        )
-        return horiz_ok and vert_ok
-
-    # 2) Filtrage des points sur le cadre
-    for frame in frames:
-        pts = frame.points
-        if not pts:
-            continue
-
-        if not _has_full_rectangle(pts):
-            continue
-
-        # On supprime tous les points qui collent à un bord global.
-        new_points: List[IldaPoint] = [
-            p
-            for p in pts
-            if not (
-                abs(p.y - gy0) <= tol_y
-                or abs(p.y - gy1) <= tol_y
-                or abs(p.x - gx0) <= tol_x
-                or abs(p.x - gx1) <= tol_x
-            )
-        ]
-        frame.points = new_points
-
 
 def _make_normalizer(
     global_bbox: Tuple[float, float, float, float],
@@ -309,11 +288,10 @@ def _make_normalizer(
 # API principale : export ILDA
 # =====================================================================
 
-
 def export_project_to_ilda(
     project_name: str,
     fit_axis: str = "max",
-    fill_ratio: float = 0.95,
+    fill_ratio: float = 0.98,
     min_rel_size: float = 0.01,
     remove_outer_frame: bool = True,
     frame_margin_rel: float = 0.02,
@@ -329,7 +307,9 @@ def export_project_to_ilda(
     - fit_axis          : "max", "min", "x", "y" (axe de référence pour le zoom)
     - fill_ratio        : ratio de remplissage de la fenêtre ILDA globale
     - min_rel_size      : taille relative minimale pour garder un chemin
-    - remove_outer_frame: si True, essaie de supprimer le "cadre" (au niveau ILDA)
+                           (appliquée par frame, pas globalement)
+    - remove_outer_frame: si True, essaie de supprimer le "cadre"
+                          (au niveau SVG)
     - frame_margin_rel  : tolérance pour la détection de cadre
     - check_cancel      : callback d'annulation
     - report_progress   : callback de progression prenant l’index de frame (0-based)
@@ -368,27 +348,38 @@ def export_project_to_ilda(
     if not all_bboxes:
         raise RuntimeError("Aucun chemin exploitable trouvé dans les SVG du projet.")
 
-    global_bbox_initial = _combine_bbox(all_bboxes)
+    global_bbox = _combine_bbox(all_bboxes)
 
     # --------------------------------------------------------------
-    # 2) Pour l'instant : PAS de suppression de cadre au niveau SVG.
-    #    On utilise directement la bbox initiale pour la normalisation.
-    #    Le nettoyage de cadre se fait au niveau ILDA ensuite.
+    # 2) Optionnel : détection du cadre au niveau SVG
     # --------------------------------------------------------------
-    global_bbox = global_bbox_initial
+    if remove_outer_frame:
+        _detect_outer_frame_paths(frames_paths, global_bbox, frame_margin_rel)
 
     normalizer = _make_normalizer(global_bbox, fit_axis=fit_axis, fill_ratio=fill_ratio)
-
-    gx0, gx1, gy0, gy1 = global_bbox
-    span_x = gx1 - gx0
-    span_y = gy1 - gy0
-    global_span = max(span_x, span_y)
 
     # --------------------------------------------------------------
     # 3) Construction des frames ILDA
     # --------------------------------------------------------------
     frames: List[IldaFrame] = []
     total_frames = len(svg_files)
+
+    # Pré-calcul : pour chaque frame, une bbox locale (hors chemins de cadre)
+    frame_local_spans: List[float] = []
+    for frame_paths in frames_paths:
+        xs: List[float] = []
+        ys: List[float] = []
+        for pd in frame_paths:
+            if pd.is_outer_frame:
+                continue
+            x0, x1, y0, y1 = pd.bbox
+            xs.extend([x0, x1])
+            ys.extend([y0, y1])
+        if xs and ys:
+            span = max(max(xs) - min(xs), max(ys) - min(ys))
+        else:
+            span = 0.0
+        frame_local_spans.append(span)
 
     for idx, frame_paths in enumerate(frames_paths):
         if check_cancel is not None and check_cancel():
@@ -398,15 +389,89 @@ def export_project_to_ilda(
 
         ilda_points: List[IldaPoint] = []
 
+        # Taille caractéristique pour cette frame (pour le filtrage relatif)
+        local_span = frame_local_spans[idx]
+        # Fallback : si local_span nul, on retombe sur la taille globale
+        gx0, gx1, gy0, gy1 = global_bbox
+        global_span = max(gx1 - gx0, gy1 - gy0)
+        if local_span <= 0 and global_span > 0:
+            local_span = global_span
+        elif local_span <= 0:
+            local_span = 1.0  # valeur de secours
+
         for pd in frame_paths:
             if pd.is_outer_frame:
-                # En pratique, is_outer_frame sera toujours False avec la
-                # stratégie actuelle, mais on garde le test par sécurité.
                 continue
 
             x0, x1, y0, y1 = pd.bbox
             w = x1 - x0
             h = y1 - y0
-            rel_size = max(w, h) / global_span if global_span > 0 else 1.0
+            rel_size = max(w, h) / local_span if local_span > 0 else 1.0
 
-            # Filtrage par taille relative
+            if min_rel_size > 0.0 and rel_size < min_rel_size:
+                # Petit parasite → on ignore (en mode arcade, on pourra
+                # simplement fixer min_rel_size à 0.0 pour tout garder).
+                continue
+
+            pts = pd.points
+            if not pts:
+                continue
+
+            # Conversion des points en coordonnées ILDA
+            ilda_coords = [normalizer(x, y) for (x, y) in pts]
+
+            # Premier point blanked = déplacement sans trace
+            first_x, first_y = ilda_coords[0]
+            ilda_points.append(
+                IldaPoint(
+                    x=first_x,
+                    y=first_y,
+                    z=0,
+                    blanked=True,
+                    color_index=profile.base_color_index,
+                )
+            )
+
+            # Points lumineux
+            for x, y in ilda_coords[1:]:
+                ilda_points.append(
+                    IldaPoint(
+                        x=x,
+                        y=y,
+                        z=0,
+                        blanked=False,
+                        color_index=profile.base_color_index,
+                    )
+                )
+
+        # Si aucun point, on crée un point blanked central (frame noire).
+        if not ilda_points:
+            ilda_points.append(
+                IldaPoint(
+                    x=0,
+                    y=0,
+                    z=0,
+                    blanked=True,
+                    color_index=profile.base_color_index,
+                )
+            )
+
+        frame = IldaFrame(
+            name=f"F{idx:04d}",
+            company="LPIP",
+            points=ilda_points,
+            projector=0,
+        )
+        frames.append(frame)
+
+        if report_progress is not None:
+            # Le wrapper pipeline interprète ce paramètre comme un index
+            # de frame (0-based), et non un pourcentage.
+            report_progress(idx)
+
+    # --------------------------------------------------------------
+    # 4) Écriture du fichier ILDA
+    # --------------------------------------------------------------
+    out_path = ilda_dir / f"{project_name}.ild"
+    write_ilda_file(out_path, frames)
+    return out_path
