@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from typing import Optional
 
-from core.step_bitmap import convert_project_frames_to_bmp
+from core.bitmap_convert import convert_project_frames_to_bmp
 from .base import FrameProgress, StepResult, ProgressCallback, CancelCallback
 
 

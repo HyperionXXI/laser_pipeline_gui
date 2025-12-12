@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from typing import Optional
 
-from core.pipeline.base import FrameProgress, StepResult, ProgressCallback, CancelCallback
+from core.pipeline.base import StepResult, ProgressCallback, CancelCallback
 from core.pipeline.ffmpeg_step import run_ffmpeg_step
 from core.pipeline.bitmap_step import run_bitmap_step
 from core.pipeline.potrace_step import run_potrace_step
@@ -55,12 +55,11 @@ def run_full_pipeline_step(
     progress_cb: Optional[ProgressCallback] = None,
     cancel_cb: Optional[CancelCallback] = None,
 ) -> StepResult:
-    # 1) FFmpeg : vidéo -> PNG
+
     res = _wrap_step("ffmpeg", run_ffmpeg_step, progress_cb, cancel_cb, video_path, project, fps)
     if not res.success:
         return res
 
-    # 2) Bitmap : PNG -> BMP
     res = _wrap_step(
         "bitmap",
         run_bitmap_step,
@@ -74,12 +73,10 @@ def run_full_pipeline_step(
     if not res.success:
         return res
 
-    # 3) Potrace : BMP -> SVG
     res = _wrap_step("potrace", run_potrace_step, progress_cb, cancel_cb, project)
     if not res.success:
         return res
 
-    # 4) ILDA : SVG -> .ild
     res = _wrap_step(
         "ilda",
         run_ilda_step,
@@ -94,12 +91,8 @@ def run_full_pipeline_step(
     if not res.success:
         return res
 
-    msg = "Pipeline complet termine : FFmpeg + Bitmap + Potrace + ILDA."
-    if getattr(res, "message", ""):
-        msg += f"\nDernier step (ILDA) : {res.message}"
-
     return StepResult(
         success=True,
-        message=msg,
+        message="Pipeline complet terminé (FFmpeg → Bitmap → Potrace → ILDA).",
         output_dir=res.output_dir,
     )

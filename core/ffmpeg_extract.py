@@ -1,4 +1,4 @@
-# core/step_ffmpeg.py
+# core/ffmpeg_extract.py
 from __future__ import annotations
 
 import subprocess
@@ -9,13 +9,10 @@ from .config import FFMPEG_PATH, PROJECTS_ROOT
 
 def extract_frames(input_video: str, project_name: str, fps: int = 25) -> Path:
     """
-    Extrait des frames PNG depuis une vidéo dans un dossier de projet.
-
-    Returns:
-        Path du dossier contenant les frames.
+    Extrait des frames PNG dans projects/<project>/frames/frame_%04d.png
     """
-    root = PROJECTS_ROOT / project_name
-    frames_dir = root / "frames"
+    project_root = PROJECTS_ROOT / project_name
+    frames_dir = project_root / "frames"
     frames_dir.mkdir(parents=True, exist_ok=True)
 
     cmd = [

@@ -1,4 +1,4 @@
-# core/step_bitmap.py
+# core/bitmap_convert.py
 from __future__ import annotations
 
 import subprocess
@@ -8,18 +8,12 @@ from typing import Callable, Optional
 from .config import MAGICK_PATH, PROJECTS_ROOT
 
 
-def convert_png_to_bmp(
+def _convert_png_to_bmp(
     png_path: Path,
     bmp_path: Path,
     threshold: int,
     thinning: bool,
 ) -> None:
-    """
-    Convertit un PNG en BMP noir/blanc via ImageMagick.
-
-    - threshold : 0..100 (%)
-    - thinning  : True/False pour -morphology Thinning
-    """
     if not (0 <= threshold <= 100):
         raise ValueError("threshold doit être dans [0..100]")
 
@@ -54,11 +48,6 @@ def convert_project_frames_to_bmp(
     frame_callback: Optional[Callable[[int, int, Path], None]] = None,
     cancel_cb: Optional[Callable[[], bool]] = None,
 ) -> Path:
-    """
-    Parcourt projects/<project>/frames/frame_*.png et génère projects/<project>/bmp/frame_*.bmp.
-
-    frame_callback(index_1_based, total_frames, bmp_path)
-    """
     project_root = PROJECTS_ROOT / project_name
     frames_dir = project_root / "frames"
     bmp_dir = project_root / "bmp"
@@ -73,19 +62,13 @@ def convert_project_frames_to_bmp(
         raise RuntimeError(f"Aucune frame PNG trouvée dans {frames_dir}")
 
     for idx, png_path in enumerate(png_files, start=1):
-        if cancel_cb is not None and cancel_cb():
+        if cancel_cb and cancel_cb():
             raise RuntimeError("Conversion BMP annulée par l'utilisateur.")
 
         bmp_path = bmp_dir / (png_path.stem + ".bmp")
+        _convert_png_to_bmp(png_path, bmp_path, threshold, use_thinning)
 
-        convert_png_to_bmp(
-            png_path=png_path,
-            bmp_path=bmp_path,
-            threshold=threshold,
-            thinning=use_thinning,
-        )
-
-        if frame_callback is not None:
+        if frame_callback:
             frame_callback(idx, total, bmp_path)
 
     return bmp_dir

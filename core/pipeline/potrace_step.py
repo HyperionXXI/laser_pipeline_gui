@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Optional
 
 from core.config import PROJECTS_ROOT
-from core.step_potrace import bitmap_to_svg_folder
+from core.potrace_vectorize import bitmap_to_svg_folder
 from .base import FrameProgress, StepResult, ProgressCallback, CancelCallback
 
 

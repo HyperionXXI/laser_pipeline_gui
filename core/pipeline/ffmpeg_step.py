@@ -4,7 +4,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Optional
 
-from core.step_ffmpeg import extract_frames
+from core.ffmpeg_extract import extract_frames
 from .base import FrameProgress, StepResult, ProgressCallback, CancelCallback
 
 
