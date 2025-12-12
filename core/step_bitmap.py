@@ -1,11 +1,11 @@
 # core/step_bitmap.py
 from __future__ import annotations
 
-from pathlib import Path
 import subprocess
-from typing import Optional, Callable
+from pathlib import Path
+from typing import Callable, Optional
 
-from .config import PROJECTS_ROOT, MAGICK_PATH
+from .config import MAGICK_PATH, PROJECTS_ROOT
 
 
 def convert_png_to_bmp(
@@ -18,8 +18,11 @@ def convert_png_to_bmp(
     Convertit un PNG en BMP noir/blanc via ImageMagick.
 
     - threshold : 0..100 (%)
-    - thinning  : True/False pour l'option -morphology Thinning
+    - thinning  : True/False pour -morphology Thinning
     """
+    if not (0 <= threshold <= 100):
+        raise ValueError("threshold doit être dans [0..100]")
+
     bmp_path.parent.mkdir(parents=True, exist_ok=True)
 
     cmd = [
@@ -32,13 +35,15 @@ def convert_png_to_bmp(
     ]
 
     if thinning:
-        # Même option qu'avant, on ne change pas la sémantique
         cmd += ["-morphology", "Thinning", "Skeleton"]
 
     cmd.append(str(bmp_path))
 
-    # Appel synchrone, rapide, et qui lèvera une exception si ImageMagick échoue.
-    subprocess.run(cmd, check=True)
+    try:
+        subprocess.run(cmd, check=True, capture_output=True, text=True)
+    except subprocess.CalledProcessError as e:
+        stderr = (e.stderr or "").strip()
+        raise RuntimeError(f"ImageMagick a échoué :\n{stderr}") from e
 
 
 def convert_project_frames_to_bmp(
@@ -50,16 +55,9 @@ def convert_project_frames_to_bmp(
     cancel_cb: Optional[Callable[[], bool]] = None,
 ) -> Path:
     """
-    Parcourt projects/<project_name>/frames/frame_*.png et génère
-    projects/<project_name>/bmp/frame_*.bmp.
+    Parcourt projects/<project>/frames/frame_*.png et génère projects/<project>/bmp/frame_*.bmp.
 
-    - threshold    : 0..100 (%)
-    - use_thinning : applique ou non le Thinning
-    - max_frames   : si non None, limite aux N premières frames
-    - frame_callback : appelé à chaque frame générée :
-        frame_callback(index_1_based, total_frames, bmp_path)
-    - cancel_cb : si fourni et retourne True, la conversion est annulée
-      AVANT de lancer la conversion de la frame suivante.
+    frame_callback(index_1_based, total_frames, bmp_path)
     """
     project_root = PROJECTS_ROOT / project_name
     frames_dir = project_root / "frames"
@@ -75,13 +73,11 @@ def convert_project_frames_to_bmp(
         raise RuntimeError(f"Aucune frame PNG trouvée dans {frames_dir}")
 
     for idx, png_path in enumerate(png_files, start=1):
-        # Annulation entre les frames (suffisant en pratique)
         if cancel_cb is not None and cancel_cb():
             raise RuntimeError("Conversion BMP annulée par l'utilisateur.")
 
         bmp_path = bmp_dir / (png_path.stem + ".bmp")
 
-        # Conversion synchrone d'une frame
         convert_png_to_bmp(
             png_path=png_path,
             bmp_path=bmp_path,

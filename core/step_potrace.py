@@ -1,59 +1,51 @@
 # core/step_potrace.py
 from __future__ import annotations
 
-from pathlib import Path
 import subprocess
-from typing import Callable, Optional, List
+from pathlib import Path
+from typing import Callable, List, Optional
 
 from .config import POTRACE_PATH
 
 
 def _run_potrace_single(bmp_path: Path, svg_path: Path) -> None:
-    """
-    Lance Potrace pour convertir un BMP en SVG.
-    """
+    """Lance Potrace pour convertir un BMP en SVG."""
     svg_path.parent.mkdir(parents=True, exist_ok=True)
 
     cmd = [
         str(POTRACE_PATH),
-        "-s",            # sortie SVG
-        "-o", str(svg_path),
+        "-s",
+        "-o",
+        str(svg_path),
         str(bmp_path),
     ]
 
-    subprocess.run(cmd, check=True)
+    try:
+        subprocess.run(cmd, check=True, capture_output=True, text=True)
+    except subprocess.CalledProcessError as e:
+        stderr = (e.stderr or "").strip()
+        raise RuntimeError(f"Potrace a échoué :\n{stderr}") from e
 
 
 def _postprocess_svg(svg_path: Path) -> None:
     """
-    Post-traitement du SVG généré par Potrace afin de forcer un style
-    adapté au laser et lisible dans la prévisualisation :
-
-    - pas de remplissage (fill="none")
-    - trait blanc (stroke="#FFFFFF")
-    - trait suffisamment épais pour être visible (stroke-width="3")
-    - jonctions / extrémités arrondies
+    Post-traitement SVG Potrace (uniquement pour preview, pas utilisé pour l'ILDA).
     """
     import xml.etree.ElementTree as ET
 
     tree = ET.parse(svg_path)
     root = tree.getroot()
 
-    # Gestion simple du namespace éventuel
     def is_tag(elem, local: str) -> bool:
         return elem.tag == local or elem.tag.endswith("}" + local)
 
     for elem in root.iter():
         if is_tag(elem, "path"):
-            # On force un style simple et compatible laser,
-            # les attributs visuels NE sont PAS utilisés pour l'ILDA.
             elem.set("fill", "none")
             elem.set("stroke", "#FFFFFF")
-            elem.set("stroke-width", "3")  # ← plus épais pour la prévisualisation
+            elem.set("stroke-width", "3")
             elem.set("stroke-linejoin", "round")
             elem.set("stroke-linecap", "round")
-
-            # On supprime l'attribut 'style' si présent pour éviter les conflits
             if "style" in elem.attrib:
                 del elem.attrib["style"]
 
@@ -67,16 +59,7 @@ def bitmap_to_svg_folder(
     frame_callback: Optional[Callable[[int, int, Path], None]] = None,
     cancel_cb: Optional[Callable[[], bool]] = None,
 ) -> str:
-    """
-    Parcourt un dossier de BMP (frame_*.bmp) et génère des SVG correspondants.
-
-    - bmp_dir : chemin vers le dossier des BMP
-    - svg_dir : dossier de sortie des SVG
-    - max_frames : limite optionnelle du nombre de frames
-    - frame_callback(idx, total, svg_path) : appelé pour chaque frame générée
-    - cancel_cb() -> bool : si True, la conversion est interrompue
-      via RuntimeError
-    """
+    """Convertit frame_*.bmp -> frame_*.svg pour un dossier."""
     bmp_dir_p = Path(bmp_dir)
     svg_dir_p = Path(svg_dir)
     svg_dir_p.mkdir(parents=True, exist_ok=True)
