@@ -4,9 +4,8 @@ from __future__ import annotations
 import sys
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
 
-from PySide6.QtCore import Qt, Slot
+from PySide6.QtCore import Slot
 from PySide6.QtGui import QTextCursor, QAction
 from PySide6.QtWidgets import (
     QApplication,
@@ -47,22 +46,26 @@ class MainWindow(QMainWindow):
         # File menu
         file_menu = menu.addMenu("File")
         open_action = QAction("Open Video...", self)
+        open_action.setShortcut("Ctrl+O")
         open_action.triggered.connect(self.choose_video)
         file_menu.addAction(open_action)
 
         exit_action = QAction("Exit", self)
+        exit_action.setShortcut("Ctrl+Q")
         exit_action.triggered.connect(self.close)
         file_menu.addAction(exit_action)
 
         # Project menu
         proj_menu = menu.addMenu("Project")
         new_proj_action = QAction("New Project...", self)
+        new_proj_action.setShortcut("Ctrl+N")
         new_proj_action.triggered.connect(self.on_new_project)
         proj_menu.addAction(new_proj_action)
 
         # Help menu
         help_menu = menu.addMenu("Help")
         about_action = QAction("About", self)
+        about_action.setShortcut("F1")
         about_action.triggered.connect(self.on_about)
         help_menu.addAction(about_action)
 
@@ -300,17 +303,25 @@ class MainWindow(QMainWindow):
             self.progress_bar.setVisible(True)
             self.progress_bar.setRange(0, 0)
             self.btn_cancel.setEnabled(True)
+            self.btn_cancel.setText("Annuler la tâche en cours")
         else:
             self.progress_bar.setRange(0, 100)
             self.progress_bar.setValue(0)
             self.progress_bar.setVisible(False)
             self.btn_cancel.setEnabled(False)
+            self.btn_cancel.setText("Annuler la tâche en cours")
+
+    @staticmethod
+    def _ui_frame_to_ilda_index(ui_frame: int) -> int:
+        """UI frame is 1-based; ILDA preview index is 0-based."""
+        return max(ui_frame - 1, 0)
 
     # ---------------- Slots pipeline -----------------------------
 
     @Slot(str)
     def on_step_started(self, step_name: str) -> None:
         self.set_busy(True)
+        self.log(f"[{step_name}] démarrage…")
 
     @Slot(str, object)
     def on_step_finished(self, step_name: str, result: object) -> None:
@@ -366,14 +377,11 @@ class MainWindow(QMainWindow):
         )
         if path:
             self.edit_video_path.setText(path)
+            self.edit_video_path.setFocus()
             self.log(f"Vidéo sélectionnée : {path}")
 
     def on_new_project(self) -> None:
-        """Create a new project directory structure under `PROJECTS_ROOT`.
-
-        Prompts for a project name, creates subfolders and sets the project
-        name in the UI if successful.
-        """
+        """Create a new project directory structure under `PROJECTS_ROOT`."""
         name, ok = QInputDialog.getText(self, "Créer un projet", "Nom du projet:")
         if not ok:
             return
@@ -393,11 +401,21 @@ class MainWindow(QMainWindow):
             self.log(f"Erreur création projet : {e}")
 
     def on_about(self) -> None:
-        QMessageBox.about(
-            self,
-            "About Laser Pipeline GUI",
-            "Laser Pipeline GUI\n\nExperimental video → ILDA pipeline. See README.md for details.",
-        )
+        readme_text = ""
+        try:
+            readme_path = Path(__file__).resolve().parent.parent / "README.md"
+            if readme_path.exists():
+                readme_text = readme_path.read_text(encoding="utf-8")
+        except Exception as e:
+            readme_text = f"(Could not load README.md: {e})"
+
+        msg = QMessageBox(self)
+        msg.setWindowTitle("About Laser Pipeline GUI")
+        msg.setIcon(QMessageBox.Information)
+        msg.setText("Laser Pipeline GUI\n\nExperimental video → ILDA pipeline.")
+        if readme_text:
+            msg.setDetailedText(readme_text)
+        msg.exec()
 
     def on_test_click(self) -> None:
         video = (self.edit_video_path.text() or "").strip()
@@ -462,7 +480,11 @@ class MainWindow(QMainWindow):
         self.pipeline.start_ilda(project, ilda_mode=mode_key)
 
     def on_cancel_task(self) -> None:
+        if not self.btn_cancel.isEnabled():
+            return
         self.btn_cancel.setEnabled(False)
+        self.btn_cancel.setText("Annulation…")
+        self.log("[UI] Annulation demandée…")
         self.pipeline.cancel_current_step()
 
     # ---------------- Preview helpers ----------------------------
@@ -493,11 +515,11 @@ class MainWindow(QMainWindow):
             self.log("Erreur preview : nom de projet vide.")
             return
 
-        frame_index = self.spin_frame.value()
+        ui_frame = self.spin_frame.value()
         project_root = PROJECTS_ROOT / project
-        png = project_root / "frames" / f"frame_{frame_index:04d}.png"
-        bmp = project_root / "bmp" / f"frame_{frame_index:04d}.bmp"
-        svg = project_root / "svg" / f"frame_{frame_index:04d}.svg"
+        png = project_root / "frames" / f"frame_{ui_frame:04d}.png"
+        bmp = project_root / "bmp" / f"frame_{ui_frame:04d}.bmp"
+        svg = project_root / "svg" / f"frame_{ui_frame:04d}.svg"
 
         if png.exists():
             self.preview_png.show_image(str(png))
@@ -513,13 +535,17 @@ class MainWindow(QMainWindow):
         if ilda_path.exists():
             preview_dir = project_root / "preview"
             preview_dir.mkdir(parents=True, exist_ok=True)
-            out_png = preview_dir / f"ilda_preview_{frame_index:04d}.png"
+            out_png = preview_dir / f"ilda_preview_{ui_frame:04d}.png"
             try:
-                render_ilda_preview(ilda_path, out_png, frame_index=max(frame_index - 1, 0))
+                render_ilda_preview(
+                    ilda_path,
+                    out_png,
+                    frame_index=self._ui_frame_to_ilda_index(ui_frame),
+                )
                 self.preview_ilda.show_image(str(out_png))
-                self.log(f"[Preview] ILDA frame {frame_index} : {out_png}")
+                self.log(f"[Preview] ILDA frame {ui_frame} : {out_png}")
             except Exception as e:
-                self.log(f"[Preview] Impossible de générer la preview ILDA frame {frame_index} : {e}")
+                self.log(f"[Preview] Impossible de générer la preview ILDA frame {ui_frame} : {e}")
         else:
             self.log("[Preview] Aucun fichier ILDA trouvé pour cette frame.")
 
@@ -531,7 +557,7 @@ class MainWindow(QMainWindow):
         fps = self.spin_fps.value()
 
         if not video:
-            self.log("Erreur : aucun fichier vidéo sélectionnée.")
+            self.log("Erreur : aucun fichier vidéo sélectionné.")
             return
         if not project:
             self.log("Erreur : nom de projet vide.")

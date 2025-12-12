@@ -1,7 +1,7 @@
 # gui/pipeline_controller.py
 from __future__ import annotations
 
-from typing import Callable, Optional, Any
+from typing import Callable, Optional
 
 from PySide6.QtCore import QObject, QThread, Signal, Slot
 
@@ -21,7 +21,7 @@ class _StepWorker(QObject):
     error = Signal(str)
     progress = Signal(object)   # FrameProgress
 
-    def __init__(self, step_func: Callable[..., StepResult], *args: Any, **kwargs: Any) -> None:
+    def __init__(self, step_func: Callable[..., StepResult], *args, **kwargs) -> None:
         super().__init__()
         self._step_func = step_func
         self._args = args
@@ -80,8 +80,8 @@ class PipelineController(QObject):
         self,
         step_name: str,
         step_func: Callable[..., StepResult],
-        *args: Any,
-        **kwargs: Any,
+        *args,
+        **kwargs,
     ) -> None:
         if self._thread is not None:
             self._log(f"[Pipeline] Un step est déjà en cours ({self._current_step}).")

@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from PySide6.QtCore import Qt, QRectF
-from PySide6.QtGui import QPainter, QPixmap
+from PySide6.QtGui import QPainter, QPixmap, QPaintEvent
 from PySide6.QtSvg import QSvgRenderer
 from PySide6.QtWidgets import QWidget
 
@@ -24,7 +24,7 @@ class RasterPreview(QWidget):
         self._pixmap = QPixmap(str(path))
         self.update()
 
-    def paintEvent(self, event) -> None:  # type: ignore[override]
+    def paintEvent(self, event: QPaintEvent) -> None:  # type: ignore[override]
         painter = QPainter(self)
 
         # Fond noir pour bien contraster avec les traits clairs
@@ -59,7 +59,6 @@ class SvgPreview(QWidget):
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
-
         self._renderer = QSvgRenderer(self)
         self.setMinimumSize(240, 180)
 
@@ -68,13 +67,18 @@ class SvgPreview(QWidget):
         self._renderer.load(str(path))
         self.update()
 
-    def paintEvent(self, event) -> None:  # type: ignore[override]
+    def paintEvent(self, event: QPaintEvent) -> None:  # type: ignore[override]
         painter = QPainter(self)
 
         # Fond noir pour voir correctement les traits
         painter.fillRect(self.rect(), Qt.black)
 
         if not self._renderer.isValid():
+            return
+
+        widget_w = self.width()
+        widget_h = self.height()
+        if widget_w <= 0 or widget_h <= 0:
             return
 
         view_box: QRectF = self._renderer.viewBoxF()
@@ -89,31 +93,20 @@ class SvgPreview(QWidget):
             self._renderer.render(painter)
             return
 
-        widget_w = self.width()
-        widget_h = self.height()
-        if widget_w <= 0 or widget_h <= 0:
-            return
-
         aspect_view = vw / vh
         aspect_widget = widget_w / widget_h
 
-        # On construit un rectangle cible avec le même ratio que la viewBox,
-        # puis on le centre dans le widget.
+        # Rectangle cible avec même ratio que la viewBox, centré.
         if aspect_widget > aspect_view:
-            # Widget plus "large" que la viewBox : bandes latérales
             target_h = float(widget_h)
             target_w = target_h * aspect_view
             x = (widget_w - target_w) / 2.0
             y = 0.0
         else:
-            # Widget plus "haut" : bandes en haut/bas
             target_w = float(widget_w)
             target_h = target_w / aspect_view
             x = 0.0
             y = (widget_h - target_h) / 2.0
 
         target_rect = QRectF(x, y, target_w, target_h)
-
-        # Comme target_rect et viewBox ont le même ratio, il n'y a
-        # aucune déformation : QSvgRenderer applique un scale uniforme.
         self._renderer.render(painter, target_rect)
