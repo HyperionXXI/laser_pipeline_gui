@@ -9,20 +9,19 @@ from .config import POTRACE_PATH
 
 
 def _run_potrace_single(bmp_path: Path, svg_path: Path, *, invert: bool) -> None:
-    """
-    Lance Potrace pour convertir un BMP en SVG.
+    """Lance Potrace sur un BMP et génère un SVG.
 
-    Important:
+    Notes importantes:
     - Potrace vectorise les pixels NOIRS (foreground).
-    - Si le BMP est "traits blancs sur fond noir", Potrace va surtout vectoriser le fond
-      et génère typiquement un grand contour rectangulaire ("cadre").
-    - L'option '-i' inverse les couleurs côté Potrace, ce qui permet de vectoriser les traits.
+    - Si tes BMP sont "trait blanc sur fond noir", Potrace trace surtout le fond
+      et génère typiquement un grand contour rectangulaire (le "cadre") + des trous.
+    - L'option '-i' inverse les couleurs côté Potrace pour vectoriser les traits.
     """
     svg_path.parent.mkdir(parents=True, exist_ok=True)
 
-    cmd = [
+    cmd: List[str] = [
         str(POTRACE_PATH),
-        "-s",
+        "-s",                 # output SVG
         "-o",
         str(svg_path),
     ]
@@ -36,6 +35,17 @@ def _run_potrace_single(bmp_path: Path, svg_path: Path, *, invert: bool) -> None
         subprocess.run(cmd, check=True, capture_output=True, text=True)
     except subprocess.CalledProcessError as e:
         stderr = (e.stderr or "").strip()
+
+        # Message plus explicite si la version de potrace ne supporte pas -i
+        if invert and ("unknown option" in stderr.lower() or "unrecognized option" in stderr.lower()):
+            raise RuntimeError(
+                "Potrace a échoué: l'option '-i' (invert) n'est pas reconnue par cette version.\n"
+                "Solutions:\n"
+                " - Mettre à jour Potrace (recommandé), ou\n"
+                " - Désactiver l'inversion côté Potrace et inverser les BMP en amont (ImageMagick/step bitmap).\n"
+                f"Détail: {stderr}"
+            ) from e
+
         raise RuntimeError(f"Potrace a échoué :\n{stderr}") from e
 
 
@@ -49,16 +59,16 @@ def bitmap_to_svg_folder(
     invert: bool = True,
     invert_for_potrace: Optional[bool] = None,
 ) -> str:
-    """
-    Vectorise un dossier de BMP (frame_*.bmp) en SVG avec Potrace.
+    """Vectorise tous les frame_*.bmp d'un dossier vers des frame_*.svg.
 
     Args:
-        invert:
-            - True (défaut) : applique '-i' (recommandé si BMP = traits blancs sur fond noir).
-            - False : si tes BMP sont déjà "traits noirs sur fond blanc".
-        invert_for_potrace:
-            Alias rétro-compatible de 'invert' (utilisé par potrace_step.py).
-            Si fourni, il override 'invert'.
+        bmp_dir: Dossier contenant des BMP nommés frame_*.bmp
+        svg_dir: Dossier cible pour les SVG
+        max_frames: Limite optionnelle du nombre de frames traitées
+        frame_callback: callback(idx, total, svg_path)
+        cancel_cb: callback() -> bool, True pour annuler
+        invert: Active l'inversion via Potrace '-i' (défaut True).
+        invert_for_potrace: Alias rétro-compatible (anciens appels). Override 'invert' si fourni.
     """
     if invert_for_potrace is not None:
         invert = bool(invert_for_potrace)

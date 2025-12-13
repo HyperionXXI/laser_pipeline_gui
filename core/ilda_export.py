@@ -7,10 +7,12 @@ from typing import Callable, List, Optional, Tuple
 import xml.etree.ElementTree as ET
 
 from svgpathtools import Line, parse_path
+from PIL import Image  # ajoute ceci
 
 from .config import PROJECTS_ROOT
 from .ilda_profiles import IldaProfile, get_ilda_profile
 from .ilda_writer import IldaFrame, IldaPoint, write_ilda_file
+
 
 ILDA_MIN = -32767.0
 ILDA_MAX = +32767.0
@@ -224,10 +226,11 @@ def _split_strokes(points: List[IldaPoint]) -> List[List[IldaPoint]]:
 
 def _stroke_bbox(stroke: List[IldaPoint]) -> Tuple[int, int, int, int]:
     vis = [p for p in stroke if not p.blanked]
+    if not vis:
+        return 0, 0, 0, 0
     xs = [p.x for p in vis]
     ys = [p.y for p in vis]
     return min(xs), max(xs), min(ys), max(ys)
-
 
 def _is_frame_stroke(
     stroke: List[IldaPoint],
@@ -311,6 +314,107 @@ def _remove_frame_strokes(points: List[IldaPoint]) -> List[IldaPoint]:
         return points
     return kept
 
+def _arcade_palette_256() -> list[tuple[int, int, int]]:
+    """
+    Palette 256 entrées. On remplit quelques indices utiles, le reste noir.
+    Indices choisis arbitrairement MAIS cohérents car on embarque la palette (format 2).
+    """
+    pal = [(0, 0, 0)] * 256
+    pal[0] = (0, 0, 0)          # noir
+    pal[1] = (255, 255, 255)    # blanc
+    pal[2] = (255, 0, 0)        # rouge
+    pal[3] = (0, 255, 0)        # vert
+    pal[4] = (0, 0, 255)        # bleu
+    pal[5] = (255, 255, 0)      # jaune
+    pal[6] = (0, 255, 255)      # cyan
+    pal[7] = (255, 0, 255)      # magenta
+    pal[8] = (255, 165, 0)      # orange
+    return pal
+
+
+def _nearest_palette_index(rgb: tuple[int, int, int], palette: list[tuple[int, int, int]], allowed: list[int]) -> int:
+    r, g, b = rgb
+    best_i = allowed[0]
+    best_d = 1e18
+    for i in allowed:
+        pr, pg, pb = palette[i]
+        d = (r - pr) ** 2 + (g - pg) ** 2 + (b - pb) ** 2
+        if d < best_d:
+            best_d = d
+            best_i = i
+    return best_i
+
+
+def _sample_subpath_color(img_rgb: Image.Image, pts: list[tuple[float, float]]) -> tuple[int, int, int]:
+    """
+    Echantillonne une polyligne et retourne une couleur représentative.
+    Arcade: on cherche des pixels non noirs (traits).
+    """
+    w, h = img_rgb.size
+    px = img_rgb.load()
+
+    # échantillonnage: ~64 points max
+    n = len(pts)
+    if n == 0:
+        return (255, 255, 255)
+
+    step = max(1, n // 64)
+    candidates: list[tuple[int, int, int]] = []
+
+    for i in range(0, n, step):
+        x, y = pts[i]
+        xi = min(w - 1, max(0, int(round(x))))
+        yi = min(h - 1, max(0, int(round(y))))
+        r, g, b = px[xi, yi]
+
+        # ignore quasi-noir (fond)
+        if r + g + b < 40:
+            continue
+        candidates.append((r, g, b))
+
+    if not candidates:
+        # fallback: on prend la moyenne globale des samples même si sombres
+        x, y = pts[n // 2]
+        xi = min(w - 1, max(0, int(round(x))))
+        yi = min(h - 1, max(0, int(round(y))))
+        return tuple(px[xi, yi])
+
+    # couleur dominante simple: moyenne robuste
+    sr = sum(c[0] for c in candidates)
+    sg = sum(c[1] for c in candidates)
+    sb = sum(c[2] for c in candidates)
+    m = len(candidates)
+    return (sr // m, sg // m, sb // m)
+
+
+def _estimate_linea_emotion_color(img_rgb: Image.Image) -> tuple[int, int, int]:
+    """
+    Pour La Linea : le trait est blanc, le fond exprime l'émotion.
+    On estime la couleur dominante du fond en ignorant les pixels très clairs.
+    """
+    w, h = img_rgb.size
+    px = img_rgb.load()
+
+    # échantillonne une grille (rapide)
+    samples: list[tuple[int, int, int]] = []
+    grid = 60
+    for gy in range(0, h, max(1, h // grid)):
+        for gx in range(0, w, max(1, w // grid)):
+            r, g, b = px[gx, gy]
+            # ignore pixels très clairs (trait)
+            if r > 230 and g > 230 and b > 230:
+                continue
+            samples.append((r, g, b))
+
+    if not samples:
+        return (255, 255, 255)
+
+    sr = sum(c[0] for c in samples)
+    sg = sum(c[1] for c in samples)
+    sb = sum(c[2] for c in samples)
+    m = len(samples)
+    return (sr // m, sg // m, sb // m)
+
 
 # ----------------------------------------------------------------------
 # PUBLIC API — used by pipeline ONLY
@@ -385,47 +489,57 @@ def export_project_to_ilda(
         if check_cancel and check_cancel():
             raise RuntimeError("Export ILDA annulé")
 
+        # charge la PNG source pour la couleur (si dispo)
+        png_path = (project_root / "frames" / f"frame_{frame_idx+1:04d}.png")
+        img_rgb = None
+        if png_path.exists() and mode in ("arcade", "la_linea"):
+            # IMPORTANT (Windows): utiliser un context manager pour éviter de garder le fichier ouvert.
+            with Image.open(png_path) as im:
+                img_rgb = im.convert("RGB")
+
         points: List[IldaPoint] = []
 
-        # blank jump + tracé par sous-chemin (évite les liaisons parasites)
+        # --- Couleur (robuste) -------------------------------------------------
+        # classic : couleur fixe (profile.base_color_index)
+        # arcade  : couleur par sous-chemin, estimée dans la PNG source, puis quantifiée vers une palette embarquée
+        # la_linea: couleur unique "émotion" estimée via la couleur dominante du fond (hors pixels très clairs)
+        palette = None
+        allowed = None
+        linea_idx = None
+
+        if mode in ("arcade", "la_linea"):
+            palette = _arcade_palette_256()
+            # Indices utilisables (non noirs). On pourra élargir plus tard sans casser le format.
+            allowed = [1, 2, 3, 4, 5, 6, 7, 8]
+
+            if mode == "la_linea" and img_rgb is not None:
+                emo_rgb = _estimate_linea_emotion_color(img_rgb)
+                linea_idx = _nearest_palette_index(emo_rgb, palette, allowed)
+
+        # --- Géométrie : blank jump + tracé par sous-chemin (évite les liaisons parasites) ---
         for sp in frame_subpaths:
             if not sp.points:
                 continue
 
+            # choix couleur par sous-chemin
+            if mode == "arcade" and img_rgb is not None and palette is not None and allowed is not None:
+                sp_rgb = _sample_subpath_color(img_rgb, sp.points)
+                color_idx = _nearest_palette_index(sp_rgb, palette, allowed)
+            elif mode == "la_linea" and linea_idx is not None:
+                color_idx = linea_idx
+            else:
+                color_idx = profile.base_color_index
+
             coords = [normalizer(x, y) for x, y in sp.points]
             x0, y0 = coords[0]
 
-            points.append(
-                IldaPoint(
-                    x=x0,
-                    y=y0,
-                    z=0,
-                    blanked=True,
-                    color_index=profile.base_color_index,
-                )
-            )
-
+            points.append(IldaPoint(x=x0, y=y0, z=0, blanked=True, color_index=color_idx))
             for x, y in coords[1:]:
-                points.append(
-                    IldaPoint(
-                        x=x,
-                        y=y,
-                        z=0,
-                        blanked=False,
-                        color_index=profile.base_color_index,
-                    )
-                )
+                points.append(IldaPoint(x=x, y=y, z=0, blanked=False, color_index=color_idx))
 
+        # Frame vide => point blanked pour conserver le nombre de frames
         if not points:
-            points.append(
-                IldaPoint(
-                    x=0,
-                    y=0,
-                    z=0,
-                    blanked=True,
-                    color_index=profile.base_color_index,
-                )
-            )
+            points.append(IldaPoint(x=0, y=0, z=0, blanked=True, color_index=profile.base_color_index))
 
         # --- suppression cadre au niveau ILDA (robuste) ---
         points = _remove_frame_strokes(points)
@@ -440,8 +554,11 @@ def export_project_to_ilda(
         )
 
         if report_progress:
-            report_progress(frame_idx, total_frames)
+            report_progress(frame_idx + 1, total_frames)
 
     out_path = ilda_dir / f"{project_name}.ild"
-    write_ilda_file(out_path, frames)
+    if mode in ("arcade", "la_linea"):
+        write_ilda_file(out_path, frames, palette_rgb_256=_arcade_palette_256())
+    else:
+        write_ilda_file(out_path, frames)
     return out_path

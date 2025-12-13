@@ -132,6 +132,70 @@ def _pack_ilda_point(pt: IldaPoint, is_last: bool) -> bytes:
         + bytes((status & 0xFF, int(pt.color_index) & 0xFF))
     )
 
+def _build_ilda_header(
+    *,
+    format_code: int,
+    name: str,
+    company: str,
+    num_records: int,
+    seq_no: int,
+    total_frames: int,
+    projector: int = 0,
+) -> bytes:
+    """
+    Header ILDA générique (32 octets).
+    format_code:
+      0: 3D indexed
+      2: palette
+    """
+    header = bytearray(32)
+    header[0:4] = b"ILDA"
+    header[4:7] = b"\x00\x00\x00"
+    header[7] = int(format_code) & 0xFF
+
+    name_bytes = (name or "").encode("ascii", errors="ignore")[:8]
+    header[8:16] = name_bytes.ljust(8, b"\x00")
+
+    company_bytes = (company or "").encode("ascii", errors="ignore")[:8]
+    header[16:24] = company_bytes.ljust(8, b"\x00")
+
+    header[24:26] = int(num_records).to_bytes(2, "big", signed=False)
+    header[26:28] = int(seq_no).to_bytes(2, "big", signed=False)
+    header[28:30] = int(total_frames).to_bytes(2, "big", signed=False)
+    header[30] = int(projector) & 0xFF
+    header[31] = 0
+    return bytes(header)
+
+
+def _write_palette_section(
+    f,
+    *,
+    palette_rgb_256: list[tuple[int, int, int]],
+    projector: int = 0,
+    name: str = "PALETTE",
+    company: str = "LPIP",
+) -> None:
+    """
+    Ecrit une section ILDA Format 2 (Color Palette).
+
+    Chaque record = 3 octets: R, G, B. :contentReference[oaicite:4]{index=4}
+    """
+    if len(palette_rgb_256) != 256:
+        raise ValueError("palette_rgb_256 doit contenir exactement 256 entrées (R,G,B).")
+
+    header = _build_ilda_header(
+        format_code=2,
+        name=name,
+        company=company,
+        num_records=256,
+        seq_no=0,
+        total_frames=0,
+        projector=projector,
+    )
+    f.write(header)
+
+    for (r, g, b) in palette_rgb_256:
+        f.write(bytes((int(r) & 0xFF, int(g) & 0xFF, int(b) & 0xFF)))
 
 # ======================================================================
 # Écriture de fichier ILDA
@@ -234,6 +298,74 @@ def write_test_square(path: str | Path) -> Path:
     )
     return write_ilda_file(out_path, [frame])
 
+
+def write_ilda_file(
+    path: str | Path,
+    frames: Iterable[IldaFrame],
+    *,
+    palette_rgb_256: list[tuple[int, int, int]] | None = None,
+) -> Path:
+    """
+    Ecrit un fichier ILDA.
+
+    - Frames: format 0 (3D indexed) comme avant.
+    - Optionnel: une section format 2 (palette) au début, pour que les viewers
+      utilisent NOS couleurs au lieu d'une palette arbitraire.
+    """
+    out_path = Path(path)
+    frames_list = list(frames)
+
+    with out_path.open("wb") as f:
+        # 1) Palette optionnelle
+        if palette_rgb_256 is not None:
+            _write_palette_section(f, palette_rgb_256=palette_rgb_256, projector=0)
+
+        # 2) Frames normales (format 0)
+        if frames_list:
+            total_frames = len(frames_list)
+            for seq_no, frame in enumerate(frames_list):
+                pts = frame.ensure_points()
+                num_points = len(pts)
+
+                header = _build_ilda_header(
+                    format_code=0,
+                    name=frame.name or "",
+                    company=frame.company or "LPIP",
+                    num_records=num_points,
+                    seq_no=seq_no,
+                    total_frames=total_frames,
+                    projector=frame.projector,
+                )
+                f.write(header)
+
+                for i, p in enumerate(pts):
+                    f.write(_pack_ilda_point(p, is_last=(i == num_points - 1)))
+
+            # EOF (format 0, 0 records)
+            eof_header = _build_ilda_header(
+                format_code=0,
+                name="",
+                company="",
+                num_records=0,
+                seq_no=total_frames,
+                total_frames=total_frames,
+                projector=0,
+            )
+            f.write(eof_header)
+        else:
+            # Fichier vide => EOF uniquement
+            eof_header = _build_ilda_header(
+                format_code=0,
+                name="",
+                company="",
+                num_records=0,
+                seq_no=0,
+                total_frames=0,
+                projector=0,
+            )
+            f.write(eof_header)
+
+    return out_path
 
 # Alias historique (certains anciens codes importent write_demo_square)
 def write_demo_square(path: str | Path) -> Path:

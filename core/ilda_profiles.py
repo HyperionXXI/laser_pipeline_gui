@@ -21,8 +21,8 @@ class IldaProfile:
     min_rel_size: float = 0.01
     remove_outer_frame: bool = True
     frame_margin_rel: float = 0.02
-    base_color_index: int = 0  # index de couleur ILDA par défaut
-
+#   base_color_index: int = 0  # index de couleur ILDA par défaut
+    base_color_index: int = 7  # blanc (palette ILDA standard – dans LaserShowGen, 0 apparaît rouge)
 
 ILDA_PROFILES: Dict[str, IldaProfile] = {
     # Mode actuel, comportement identique à ce que tu as aujourd'hui.
@@ -33,7 +33,8 @@ ILDA_PROFILES: Dict[str, IldaProfile] = {
         min_rel_size=0.01,
         remove_outer_frame=True,
         frame_margin_rel=0.02,
-        base_color_index=0,  # on reste sur l'index 0 (rouge dans LaserShowGen)
+#       base_color_index=0,  # on reste sur l'index 0 (rouge dans LaserShowGen)
+        base_color_index=7,  # blanc
     ),
 
     # Mode "arcade" – pour l'instant identique côté paramètres. On
@@ -46,8 +47,20 @@ ILDA_PROFILES: Dict[str, IldaProfile] = {
         min_rel_size=0.01,
         remove_outer_frame=True,
         frame_margin_rel=0.02,
-        base_color_index=0,
+#       base_color_index=0,
+        base_color_index=7,
     ),
+
+    "la_linea": IldaProfile(
+        name="la_linea",
+        fit_axis="max",
+        fill_ratio=0.95,
+        min_rel_size=0.01,
+        remove_outer_frame=True,
+        frame_margin_rel=0.02,
+        base_color_index=1,  # blanc par défaut si pas de PNG
+    ),
+
 }
 
 

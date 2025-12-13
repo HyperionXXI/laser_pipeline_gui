@@ -7,6 +7,51 @@ from typing import Callable, Optional
 
 from .config import MAGICK_PATH, PROJECTS_ROOT
 
+# Pillow est généralement dispo (vu aussi dans ton projet), mais on reste safe
+try:
+    from PIL import Image, ImageOps
+except Exception:  # pragma: no cover
+    Image = None  # type: ignore[assignment]
+    ImageOps = None  # type: ignore[assignment]
+
+
+def _maybe_invert_bmp_for_potrace(bmp_path: Path) -> None:
+    """
+    Potrace vectorise les pixels NOIRS (foreground).
+    Si un BMP est "trait blanc sur fond noir", Potrace risque de vectoriser le fond
+    => grand contour rectangulaire (le cadre) + trous.
+
+    Heuristique simple et robuste :
+    - on lit le BMP en niveaux de gris,
+    - on calcule la proportion de pixels sombres,
+    - si l'image est majoritairement sombre (fond noir dominant), on inverse.
+
+    IMPORTANT:
+    - On n'échoue pas la pipeline si cette étape échoue (best-effort).
+    """
+    if Image is None or ImageOps is None:
+        return
+
+    try:
+        im = Image.open(bmp_path).convert("L")
+
+        # Histogramme 256 bins. Pixels < 128 = "sombres"
+        hist = im.histogram()
+        total = sum(hist)
+        if total <= 0:
+            return
+
+        dark = sum(hist[:128])
+        dark_ratio = dark / total
+
+        # Si > 50% sombre, typiquement fond noir => inversion
+        if dark_ratio > 0.50:
+            inv = ImageOps.invert(im)
+            inv.save(bmp_path)
+    except Exception:
+        # best-effort : ne pas casser la pipeline
+        return
+
 
 def _convert_png_to_bmp(
     png_path: Path,
@@ -38,6 +83,9 @@ def _convert_png_to_bmp(
     except subprocess.CalledProcessError as e:
         stderr = (e.stderr or "").strip()
         raise RuntimeError(f"ImageMagick a échoué :\n{stderr}") from e
+
+    # Normalisation de polarité pour Potrace (anti-cadre)
+    _maybe_invert_bmp_for_potrace(bmp_path)
 
 
 def convert_project_frames_to_bmp(

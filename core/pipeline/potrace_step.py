@@ -61,8 +61,9 @@ def run_potrace_step(
             max_frames=None,
             frame_callback=on_frame_done,
             cancel_cb=cancel_cb,
-            invert_for_potrace=True,
+            invert_for_potrace=False,   # <-- ici
         )
+
         out_dir = Path(out_dir_str)
     except Exception as e:  # annulation ou erreur Potrace
         msg = f"Erreur Potrace : {e}"
