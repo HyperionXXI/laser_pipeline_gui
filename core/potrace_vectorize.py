@@ -8,7 +8,16 @@ from typing import Callable, List, Optional
 from .config import POTRACE_PATH
 
 
-def _run_potrace_single(bmp_path: Path, svg_path: Path) -> None:
+def _run_potrace_single(bmp_path: Path, svg_path: Path, *, invert: bool) -> None:
+    """
+    Lance Potrace pour convertir un BMP en SVG.
+
+    Important:
+    - Potrace vectorise les pixels NOIRS (foreground).
+    - Si le BMP est "traits blancs sur fond noir", Potrace va surtout vectoriser le fond
+      et génère typiquement un grand contour rectangulaire ("cadre").
+    - L'option '-i' inverse les couleurs côté Potrace, ce qui permet de vectoriser les traits.
+    """
     svg_path.parent.mkdir(parents=True, exist_ok=True)
 
     cmd = [
@@ -16,8 +25,12 @@ def _run_potrace_single(bmp_path: Path, svg_path: Path) -> None:
         "-s",
         "-o",
         str(svg_path),
-        str(bmp_path),
     ]
+
+    if invert:
+        cmd.append("-i")
+
+    cmd.append(str(bmp_path))
 
     try:
         subprocess.run(cmd, check=True, capture_output=True, text=True)
@@ -32,7 +45,24 @@ def bitmap_to_svg_folder(
     max_frames: Optional[int] = None,
     frame_callback: Optional[Callable[[int, int, Path], None]] = None,
     cancel_cb: Optional[Callable[[], bool]] = None,
+    *,
+    invert: bool = True,
+    invert_for_potrace: Optional[bool] = None,
 ) -> str:
+    """
+    Vectorise un dossier de BMP (frame_*.bmp) en SVG avec Potrace.
+
+    Args:
+        invert:
+            - True (défaut) : applique '-i' (recommandé si BMP = traits blancs sur fond noir).
+            - False : si tes BMP sont déjà "traits noirs sur fond blanc".
+        invert_for_potrace:
+            Alias rétro-compatible de 'invert' (utilisé par potrace_step.py).
+            Si fourni, il override 'invert'.
+    """
+    if invert_for_potrace is not None:
+        invert = bool(invert_for_potrace)
+
     bmp_dir_p = Path(bmp_dir)
     svg_dir_p = Path(svg_dir)
     svg_dir_p.mkdir(parents=True, exist_ok=True)
@@ -50,7 +80,7 @@ def bitmap_to_svg_folder(
             raise RuntimeError("Vectorisation Potrace annulée par l'utilisateur.")
 
         svg_path = svg_dir_p / (bmp_path.stem + ".svg")
-        _run_potrace_single(bmp_path, svg_path)
+        _run_potrace_single(bmp_path, svg_path, invert=invert)
 
         if frame_callback:
             frame_callback(idx, total, svg_path)
