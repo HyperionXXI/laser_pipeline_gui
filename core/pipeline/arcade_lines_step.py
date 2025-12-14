@@ -1,9 +1,8 @@
 # core/pipeline/arcade_lines_step.py
 from __future__ import annotations
 
-from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, List, Optional, Tuple, Dict
+from typing import List, Optional, Tuple, Dict
 
 import numpy as np
 import cv2
@@ -207,13 +206,11 @@ def _skeleton_to_polylines(skel01: np.ndarray) -> List[List[Tuple[int, int]]]:
             polylines.append(line)
 
     # 2) cycles (pas d'endpoints)
-    # trouve pixels avec arêtes non visitées
     for y, x in zip(ys, xs):
         p = (y, x)
         for nb in next_neighbors(p):
             if edge_visited(p, nb):
                 continue
-            # lance un tour
             line = [p]
             prev = p
             cur = nb
@@ -221,7 +218,6 @@ def _skeleton_to_polylines(skel01: np.ndarray) -> List[List[Tuple[int, int]]]:
             while True:
                 line.append(cur)
                 nbs = next_neighbors(cur)
-                # choisir voisin != prev
                 nxt = None
                 for cand in nbs:
                     if cand != prev and not edge_visited(cur, cand):
@@ -239,8 +235,8 @@ def _skeleton_to_polylines(skel01: np.ndarray) -> List[List[Tuple[int, int]]]:
     return [[(x, y) for (y, x) in pl] for pl in polylines]
 
 
-def _compute_global_norm(frames_pts: List[List[Tuple[int, int]]]) -> Tuple[Tuple[float, float], float]:
-    all_pts = [pt for frame in frames_pts for poly in frame for pt in poly] if frames_pts else []
+def _compute_global_norm(frames_polys: List[List[List[Tuple[int, int]]]]) -> Tuple[Tuple[float, float], float]:
+    all_pts = [pt for frame in frames_polys for poly in frame for pt in poly] if frames_polys else []
     if not all_pts:
         return (0.0, 0.0), 1.0
     xs = [p[0] for p in all_pts]
@@ -262,7 +258,7 @@ def _norm_xy(x: int, y: int, center: Tuple[float, float], scale: float, fill_rat
     return xn, yn
 
 
-def _sample_rgb_along_poly(img_bgr: np.ndarray, poly: List[Tuple[int, int]]) -> Tuple[int, int, int]:
+def _sample_rgb_along_poly(img_bgr: Optional[np.ndarray], poly: List[Tuple[int, int]]) -> Tuple[int, int, int]:
     # échantillonne quelques points -> couleur médiane
     if img_bgr is None or len(poly) == 0:
         return (255, 255, 255)
@@ -314,6 +310,9 @@ def run_arcade_lines_step(
     project: str,
     *,
     fps: int,
+    kpps: int = 30,
+    ppf_ratio: float = 0.75,
+    max_points_per_frame: Optional[int] = None,
     fill_ratio: float = 0.95,
     canny1: int = 50,
     canny2: int = 140,
@@ -327,6 +326,11 @@ def run_arcade_lines_step(
     """
     Arcade v2 (laser-first):
     frames PNG -> edges -> thinning -> polylines -> ordering -> ILDA truecolor.
+
+    kpps/ppf_ratio/max_points_per_frame:
+      - kpps: vitesse laser (kilo-points par seconde)
+      - budget auto: (kpps*1000/fps)*ppf_ratio
+      - max_points_per_frame force un budget explicite si fourni
     """
     step_name = "arcade_lines"
 
@@ -338,12 +342,28 @@ def run_arcade_lines_step(
     if not pngs:
         return StepResult(False, "Aucune frame PNG trouvée (step FFmpeg).", project_root)
 
+    if max_points_per_frame is None:
+        # budget "safe" (blanking + marge)
+        max_points_per_frame = int((kpps * 1000 / max(1, fps)) * float(ppf_ratio))
+        max_points_per_frame = max(200, min(60000, max_points_per_frame))
+
     if progress_cb:
-        progress_cb(FrameProgress(step_name=step_name, message="Extraction traits (OpenCV)…", frame_index=0, total_frames=len(pngs), frame_path=None))
+        progress_cb(
+            FrameProgress(
+                step_name=step_name,
+                message=(
+                    "Extraction traits (OpenCV)… "
+                    f"(fps={fps}, kpps={kpps}, budget={max_points_per_frame} pts/frame, "
+                    f"canny=({canny1},{canny2}), blur={blur_ksize}, min_poly_len={min_poly_len}, eps={simplify_eps})"
+                ),
+                frame_index=0,
+                total_frames=len(pngs),
+                frame_path=None,
+            )
+        )
 
     # 1) construire toutes les polylines (pour normalisation globale stable)
     all_frames_polys: List[List[List[Tuple[int, int]]]] = []
-    frame_polys_flat_for_norm: List[List[List[Tuple[int, int]]]] = []
 
     # on stocke aussi l'image BGR si sampling couleur
     bgr_cache: Dict[int, np.ndarray] = {}
@@ -376,33 +396,47 @@ def run_arcade_lines_step(
         # simplification
         polylines = [_rdp(pl, simplify_eps) for pl in polylines]
         polylines = [pl for pl in polylines if len(pl) >= 2]
-
+        # ordering pour limiter les jumps
         polylines = _order_polylines(polylines)
 
         all_frames_polys.append(polylines)
 
         if progress_cb:
-            progress_cb(FrameProgress(step_name=step_name, message=f"Frame {idx+1}/{len(pngs)}: {len(polylines)} polylines", frame_index=idx+1, total_frames=len(pngs), frame_path=p))
+            progress_cb(
+                FrameProgress(
+                    step_name=step_name,
+                    message=f"Frame {idx+1}/{len(pngs)}: polylines={len(polylines)}",
+                    frame_index=idx + 1,
+                    total_frames=len(pngs),
+                    frame_path=p,
+                )
+            )
 
     center, scale = _compute_global_norm(all_frames_polys)
 
-    # 2) conversion ILDA
+    # 2) conversion ILDA (avec cap points/frame)
     frames_out: List[IldaFrame] = []
+
     for idx, polylines in enumerate(all_frames_polys):
         if cancel_cb and cancel_cb():
             return StepResult(False, "Annulé.", project_root)
 
         pts_out: List[IldaPoint] = []
-
         img_bgr = bgr_cache.get(idx) if sample_color else None
 
         for poly in polylines:
+            if len(pts_out) >= max_points_per_frame:
+                break
+
             rgb = _sample_rgb_along_poly(img_bgr, poly) if sample_color else (255, 255, 255)
 
             x0, y0 = poly[0]
             xn0, yn0 = _norm_xy(x0, y0, center, scale, fill_ratio)
             pts_out.append(IldaPoint(x=xn0, y=yn0, blanked=True, r=rgb[0], g=rgb[1], b=rgb[2]))
+
             for (x, y) in poly[1:]:
+                if len(pts_out) >= max_points_per_frame:
+                    break
                 xn, yn = _norm_xy(x, y, center, scale, fill_ratio)
                 pts_out.append(IldaPoint(x=xn, y=yn, blanked=False, r=rgb[0], g=rgb[1], b=rgb[2]))
 
@@ -410,6 +444,17 @@ def run_arcade_lines_step(
             pts_out.append(IldaPoint(x=0, y=0, blanked=True, r=255, g=255, b=255))
 
         frames_out.append(IldaFrame(name=f"F{idx:04d}", company="LPIP", points=pts_out, projector=0))
+
+        if progress_cb:
+            progress_cb(
+                FrameProgress(
+                    step_name=step_name,
+                    message=f"Frame {idx+1}/{len(all_frames_polys)}: points={len(pts_out)}/{max_points_per_frame} (kpps={kpps}, fps={fps})",
+                    frame_index=idx + 1,
+                    total_frames=len(all_frames_polys),
+                    frame_path=None,
+                )
+            )
 
     write_ilda_file(out_path, frames_out, mode="truecolor")
 
