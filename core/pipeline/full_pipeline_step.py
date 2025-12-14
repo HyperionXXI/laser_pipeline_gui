@@ -56,10 +56,36 @@ def run_full_pipeline_step(
     cancel_cb: Optional[CancelCallback] = None,
 ) -> StepResult:
 
-    res = _wrap_step("ffmpeg", run_ffmpeg_step, progress_cb, cancel_cb, video_path, project, fps)
+    res = _wrap_step(
+        "ffmpeg",
+        run_ffmpeg_step,
+        progress_cb,
+        cancel_cb,
+        video_path,
+        project,
+        fps,
+    )
     if not res.success:
         return res
 
+    # ---- Arcade v2 : FFmpeg -> ArcadeLines(OpenCV) -> ILDA (direct)
+    if (ilda_mode or "").lower() == "arcade":
+        # lazy import pour éviter de casser le GUI si le module n'existe pas
+        # ⚠️ adapte le nom du module selon ton fichier réel :
+        from core.pipeline.arcade_lines_step import run_arcade_lines_step
+        # from core.pipeline.arcade_lines_step import run_arcade_lines_step
+
+        return _wrap_step(
+            "arcade_lines",
+            run_arcade_lines_step,
+            progress_cb,
+            cancel_cb,
+            project,
+            fps=fps,              # passe en nommé (robuste)
+            fill_ratio=fill_ratio # si ton step le supporte, sinon retire
+        )
+
+    # ---- Classic / autres : FFmpeg -> Bitmap -> Potrace -> ILDA
     res = _wrap_step(
         "bitmap",
         run_bitmap_step,
@@ -69,11 +95,19 @@ def run_full_pipeline_step(
         threshold,
         use_thinning,
         max_frames,
+        mode=ilda_mode,
     )
     if not res.success:
         return res
 
-    res = _wrap_step("potrace", run_potrace_step, progress_cb, cancel_cb, project)
+    res = _wrap_step(
+        "potrace",
+        run_potrace_step,
+        progress_cb,
+        cancel_cb,
+        project,
+        mode=ilda_mode,
+    )
     if not res.success:
         return res
 
