@@ -499,7 +499,9 @@ class MainWindow(QMainWindow):
 
         preview_dir = project_root / "preview"
         preview_dir.mkdir(parents=True, exist_ok=True)
-        ilda_path = project_root / "ilda" / f"{project}.ild"
+        ilda_path = project_root / f"{project}.ild"
+        if not ilda_path.exists():
+            ilda_path = project_root / "ilda" / f"{project}.ild"
         if ilda_path.exists():
             out_png = preview_dir / "ilda_preview.png"
             try:
@@ -531,7 +533,9 @@ class MainWindow(QMainWindow):
             self.preview_svg.show_svg(str(svg))
             self.log(f"[Preview] SVG : {svg}")
 
-        ilda_path = project_root / "ilda" / f"{project}.ild"
+        ilda_path = project_root / f"{project}.ild"
+        if not ilda_path.exists():
+            ilda_path = project_root / "ilda" / f"{project}.ild"
         if ilda_path.exists():
             preview_dir = project_root / "preview"
             preview_dir.mkdir(parents=True, exist_ok=True)

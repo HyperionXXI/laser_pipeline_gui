@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from typing import Optional
+import dataclasses
 
 from core.pipeline.base import StepResult, ProgressCallback, CancelCallback
 from core.pipeline.ffmpeg_step import run_ffmpeg_step
@@ -26,7 +27,26 @@ def _wrap_step(
             output_dir=PROJECTS_ROOT,
         )
 
-    kwargs.setdefault("progress_cb", progress_cb)
+    # Wrap progress_cb to ensure FrameProgress carries the sub-step name
+    if progress_cb is not None:
+        def _progress(fp):
+            # Try to inject step_name in the most compatible way possible
+            try:
+                cur = getattr(fp, "step_name", None)
+                if not cur:
+                    try:
+                        setattr(fp, "step_name", label)
+                    except Exception:
+                        # frozen dataclass (or similar)
+                        if dataclasses.is_dataclass(fp):
+                            fp = dataclasses.replace(fp, step_name=label)
+                progress_cb(fp)
+            except Exception:
+                # Never break the pipeline for a progress issue
+                progress_cb(fp)
+        kwargs.setdefault("progress_cb", _progress)
+    else:
+        kwargs.setdefault("progress_cb", None)
     kwargs.setdefault("cancel_cb", cancel_cb)
 
     result = func(*args, **kwargs)

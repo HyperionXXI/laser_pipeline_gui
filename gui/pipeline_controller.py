@@ -114,7 +114,10 @@ class PipelineController(QObject):
             cleanup()
 
         def on_progress(fp: FrameProgress) -> None:
-            self.step_progress.emit(step_name, fp)
+            # IMPORTANT: si un "full_pipeline" émet un FrameProgress avec un step_name interne,
+            # on relaie ce nom pour que la GUI puisse router la preview correctement.
+            effective_step = getattr(fp, "step_name", None) or step_name
+            self.step_progress.emit(effective_step, fp)
 
         worker.finished.connect(on_finished)
         worker.error.connect(on_error)
