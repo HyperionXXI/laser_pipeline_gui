@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from typing import Callable, Optional
 
-from PySide6.QtCore import QObject, QThread, Signal, Slot
+from PySide6.QtCore import QObject, QThread, Signal, Slot, Qt
 
 from core.pipeline.ffmpeg_step import run_ffmpeg_step
 from core.pipeline.bitmap_step import run_bitmap_step
@@ -95,10 +95,11 @@ class PipelineController(QObject):
         worker.moveToThread(thread)
 
         def cleanup() -> None:
+            # IMPORTANT: never call thread.wait() from within the worker thread.
+            # Use quit() + finished() cleanup to avoid "QThread::wait: Thread tried to wait on itself".
             thread.quit()
-            thread.wait()
-            worker.deleteLater()
-            thread.deleteLater()
+            thread.finished.connect(worker.deleteLater)
+            thread.finished.connect(thread.deleteLater)
             self._thread = None
             self._worker = None
             self._current_step = None
@@ -114,14 +115,12 @@ class PipelineController(QObject):
             cleanup()
 
         def on_progress(fp: FrameProgress) -> None:
-            # IMPORTANT: si un "full_pipeline" émet un FrameProgress avec un step_name interne,
-            # on relaie ce nom pour que la GUI puisse router la preview correctement.
             effective_step = getattr(fp, "step_name", None) or step_name
             self.step_progress.emit(effective_step, fp)
 
-        worker.finished.connect(on_finished)
-        worker.error.connect(on_error)
-        worker.progress.connect(on_progress)
+        worker.finished.connect(on_finished, Qt.QueuedConnection)
+        worker.error.connect(on_error, Qt.QueuedConnection)
+        worker.progress.connect(on_progress, Qt.QueuedConnection)
         thread.started.connect(worker.run)
 
         self._thread = thread
