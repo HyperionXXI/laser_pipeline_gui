@@ -12,3 +12,7 @@ __pycache__/
 .vscode/
 
 *.egg-info/
+
+WIP_*.patch
+_send_*.py
+context_gpt_REPRISE.md
