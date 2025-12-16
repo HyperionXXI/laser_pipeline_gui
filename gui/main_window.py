@@ -298,9 +298,12 @@ class MainWindow(QMainWindow):
         self.log_view.moveCursor(QTextCursor.End)
         self.log_view.ensureCursorVisible()
 
+
     def set_busy(self, busy: bool) -> None:
+        """Active/désactive l'UI pendant l'exécution d'une tâche pipeline."""
         if busy:
             self.progress_bar.setVisible(True)
+            # Indéterminé tant qu'on n'a pas de total_frames / progression
             self.progress_bar.setRange(0, 0)
             self.btn_cancel.setEnabled(True)
             self.btn_cancel.setText("Annuler la tâche en cours")
@@ -311,12 +314,25 @@ class MainWindow(QMainWindow):
             self.btn_cancel.setEnabled(False)
             self.btn_cancel.setText("Annuler la tâche en cours")
 
-    @staticmethod
-    def _ui_frame_to_ilda_index(ui_frame: int) -> int:
-        """UI frame is 1-based; ILDA preview index is 0-based."""
-        return max(ui_frame - 1, 0)
+        run_enabled = not busy
 
-    # ---------------- Slots pipeline -----------------------------
+        # Boutons pipeline
+        self.btn_run_all.setEnabled(run_enabled)
+        self.btn_ffmpeg.setEnabled(run_enabled)
+        self.btn_bmp.setEnabled(run_enabled)
+        self.btn_potrace.setEnabled(run_enabled)
+        self.btn_ilda.setEnabled(run_enabled)
+        self.btn_preview_frame.setEnabled(run_enabled)
+
+        # Paramètres
+        self.edit_video_path.setEnabled(run_enabled)
+        self.edit_project.setEnabled(run_enabled)
+        self.spin_fps.setEnabled(run_enabled)
+        self.spin_frame.setEnabled(run_enabled)
+        self.spin_bmp_threshold.setEnabled(run_enabled)
+        self.check_bmp_thinning.setEnabled(run_enabled)
+        self.spin_bmp_max_frames.setEnabled(run_enabled)
+        self.combo_ilda_mode.setEnabled(run_enabled)
 
     @Slot(str)
     def on_step_started(self, step_name: str) -> None:
@@ -348,7 +364,12 @@ class MainWindow(QMainWindow):
 
         if fp.total_frames is not None and fp.total_frames > 0:
             self.progress_bar.setRange(0, 100)
-            pct = int((fp.frame_index + 1) * 100 / fp.total_frames)
+            idx = int(fp.frame_index)
+            if idx < 0:
+                idx = 0
+            if idx > fp.total_frames:
+                idx = fp.total_frames
+            pct = int(idx * 100 / fp.total_frames)
             self.progress_bar.setValue(pct)
         else:
             self.progress_bar.setRange(0, 0)
@@ -366,7 +387,6 @@ class MainWindow(QMainWindow):
         elif step_name == "ilda":
             self.preview_ilda.show_image(path)
         elif step_name == "arcade_lines":
-            # En mode arcade, on affiche au moins la frame source pour voir l'avancement
             self.preview_png.show_image(path)
 
     # ---------------- Callbacks UI -------------------------------
