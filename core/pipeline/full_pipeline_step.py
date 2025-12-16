@@ -81,9 +81,11 @@ def run_full_pipeline_step(
             progress_cb,
             cancel_cb,
             project,
-            fps=fps,              # passe en nommé (robuste)
+            fps=fps,
             max_frames=max_frames,
-            fill_ratio=fill_ratio,  # si ton step le supporte, sinon retire
+            fill_ratio=fill_ratio,
+            sample_color=True,
+            invert_y=True,
         )
 
     # ---- Classic / autres : FFmpeg -> Bitmap -> Potrace -> ILDA

@@ -247,12 +247,24 @@ def _compute_global_norm(frames_polys: List[List[List[Tuple[int, int]]]]) -> Tup
     scale = ILDA_SPAN / span
     return (cx, cy), scale
 
-
-def _norm_xy(x: int, y: int, center: Tuple[float, float], scale: float, fill_ratio: float) -> Tuple[int, int]:
+def _norm_xy(
+    x: int,
+    y: int,
+    center: Tuple[float, float],
+    scale: float,
+    fill_ratio: float,
+    *,
+    invert_y: bool = False,
+) -> Tuple[int, int]:
     cx, cy = center
     s = scale * float(fill_ratio)
     xn = int(round((x - cx) * s))
-    yn = int(round((y - cy) * s))
+
+    dy = (y - cy)
+    if invert_y:
+        dy = -dy
+    yn = int(round(dy * s))
+
     xn = max(ILDA_MIN, min(ILDA_MAX, xn))
     yn = max(ILDA_MIN, min(ILDA_MAX, yn))
     return xn, yn
@@ -310,7 +322,7 @@ def run_arcade_lines_step(
     project: str,
     *,
     fps: int,
-    max_frames: Optional[int] = None,
+    max_frames: int | None = None,
     kpps: int = 30,
     ppf_ratio: float = 0.75,
     max_points_per_frame: Optional[int] = None,
@@ -321,6 +333,7 @@ def run_arcade_lines_step(
     min_poly_len: int = 30,
     simplify_eps: float = 1.2,
     sample_color: bool = False,
+    invert_y: bool = False,
     progress_cb: Optional[ProgressCallback] = None,
     cancel_cb: Optional[CancelCallback] = None,
 ) -> StepResult:
@@ -340,7 +353,6 @@ def run_arcade_lines_step(
     out_path = project_root / f"{project}.ild"
 
     pngs = sorted(frames_dir.glob("frame_*.png"))
-    # Limite optionnelle pour accélérer les tests (utile en GUI)
     if max_frames is not None and max_frames > 0:
         pngs = pngs[:max_frames]
     if not pngs:
@@ -435,15 +447,15 @@ def run_arcade_lines_step(
             rgb = _sample_rgb_along_poly(img_bgr, poly) if sample_color else (255, 255, 255)
 
             x0, y0 = poly[0]
-            xn0, yn0 = _norm_xy(x0, y0, center, scale, fill_ratio)
+            xn0, yn0 = _norm_xy(x0, y0, center, scale, fill_ratio, invert_y=invert_y)
             pts_out.append(IldaPoint(x=xn0, y=yn0, blanked=True, r=rgb[0], g=rgb[1], b=rgb[2]))
-
+            
             for (x, y) in poly[1:]:
                 if len(pts_out) >= max_points_per_frame:
                     break
-                xn, yn = _norm_xy(x, y, center, scale, fill_ratio)
+                xn, yn = _norm_xy(x, y, center, scale, fill_ratio, invert_y=invert_y)
                 pts_out.append(IldaPoint(x=xn, y=yn, blanked=False, r=rgb[0], g=rgb[1], b=rgb[2]))
-
+        
         if not pts_out:
             pts_out.append(IldaPoint(x=0, y=0, blanked=True, r=255, g=255, b=255))
 
@@ -456,7 +468,7 @@ def run_arcade_lines_step(
                     message=f"Frame {idx+1}/{len(all_frames_polys)}: points={len(pts_out)}/{max_points_per_frame} (kpps={kpps}, fps={fps})",
                     frame_index=idx + 1,
                     total_frames=len(all_frames_polys),
-                    frame_path=(pngs[idx] if idx < len(pngs) else None),
+                    frame_path=None,
                 )
             )
 
