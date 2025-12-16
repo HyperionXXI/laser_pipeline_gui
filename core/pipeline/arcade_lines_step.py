@@ -310,6 +310,7 @@ def run_arcade_lines_step(
     project: str,
     *,
     fps: int,
+    max_frames: Optional[int] = None,
     kpps: int = 30,
     ppf_ratio: float = 0.75,
     max_points_per_frame: Optional[int] = None,
@@ -339,6 +340,9 @@ def run_arcade_lines_step(
     out_path = project_root / f"{project}.ild"
 
     pngs = sorted(frames_dir.glob("frame_*.png"))
+    # Limite optionnelle pour accélérer les tests (utile en GUI)
+    if max_frames is not None and max_frames > 0:
+        pngs = pngs[:max_frames]
     if not pngs:
         return StepResult(False, "Aucune frame PNG trouvée (step FFmpeg).", project_root)
 
@@ -452,7 +456,7 @@ def run_arcade_lines_step(
                     message=f"Frame {idx+1}/{len(all_frames_polys)}: points={len(pts_out)}/{max_points_per_frame} (kpps={kpps}, fps={fps})",
                     frame_index=idx + 1,
                     total_frames=len(all_frames_polys),
-                    frame_path=None,
+                    frame_path=(pngs[idx] if idx < len(pngs) else None),
                 )
             )
 
