@@ -512,8 +512,22 @@ class MainWindow(QMainWindow):
 
     # ---------------- Preview helpers ----------------------------
 
+    def _resolve_ilda_path(self, project_root: Path, project: str) -> Path | None:
+        # Arcade v2 écrit: projects/<project>/<project>.ild
+        # Classic (ou structure future) pourrait être: projects/<project>/ilda/<project>.ild
+        candidates = [
+            project_root / f"{project}.ild",
+            project_root / "ilda" / f"{project}.ild",
+        ]
+        for p in candidates:
+            if p.exists():
+                return p
+        return None
+
     def _update_ilda_preview(self, project: str) -> None:
         project_root = PROJECTS_ROOT / project
+
+        # (SVG preview peut rester, mais en arcade il n’y en a pas)
         svg_dir = project_root / "svg"
         svg_files = sorted(svg_dir.glob("frame_*.svg"))
         if svg_files:
@@ -522,8 +536,9 @@ class MainWindow(QMainWindow):
 
         preview_dir = project_root / "preview"
         preview_dir.mkdir(parents=True, exist_ok=True)
-        ilda_path = project_root / "ilda" / f"{project}.ild"
-        if ilda_path.exists():
+
+        ilda_path = self._resolve_ilda_path(project_root, project)  # <- IMPORTANT
+        if ilda_path is not None:
             out_png = preview_dir / "ilda_preview.png"
             try:
                 render_ilda_preview(ilda_path, out_png, frame_index=0)
@@ -554,8 +569,8 @@ class MainWindow(QMainWindow):
             self.preview_svg.show_svg(str(svg))
             self.log(f"[Preview] SVG : {svg}")
 
-        ilda_path = project_root / "ilda" / f"{project}.ild"
-        if ilda_path.exists():
+        ilda_path = self._resolve_ilda_path(project_root, project)
+        if ilda_path is not None:
             preview_dir = project_root / "preview"
             preview_dir.mkdir(parents=True, exist_ok=True)
             out_png = preview_dir / f"ilda_preview_{ui_frame:04d}.png"
@@ -563,7 +578,7 @@ class MainWindow(QMainWindow):
                 render_ilda_preview(
                     ilda_path,
                     out_png,
-                    frame_index=self._ui_frame_to_ilda_index(ui_frame),
+                    frame_index = max(0, ui_frame - 1)
                 )
                 self.preview_ilda.show_image(str(out_png))
                 self.log(f"[Preview] ILDA frame {ui_frame} : {out_png}")
@@ -571,6 +586,7 @@ class MainWindow(QMainWindow):
                 self.log(f"[Preview] Impossible de générer la preview ILDA frame {ui_frame} : {e}")
         else:
             self.log("[Preview] Aucun fichier ILDA trouvé pour cette frame.")
+
 
     # ---------------- Full pipeline ------------------------------
 
