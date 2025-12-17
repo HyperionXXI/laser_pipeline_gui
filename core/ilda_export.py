@@ -11,7 +11,7 @@ from svgpathtools import Line, parse_path
 
 from .config import PROJECTS_ROOT
 from .ilda_profiles import get_ilda_profile
-from .ilda_writer import IldaFrame, IldaPoint, write_ilda_file
+from .ilda_writer import IldaFrame, IldaHeader, IldaPoint, write_ilda_file
 
 ILDA_MIN = -32767
 ILDA_MAX = 32767
@@ -194,7 +194,7 @@ def export_project_to_ilda(
             if not pts_out:
                 pts_out.append(IldaPoint(x=0, y=0, blanked=True, r=255, g=255, b=255))
 
-            frames_out.append(IldaFrame(name=f"F{idx:04d}", company="LPIP", points=pts_out, projector=0))
+            frames_out.append(IldaFrame(header=IldaHeader(format_code=5, frame_name=f"F{idx:04d}", scanner_head=0), points=pts_out))
 
             if report_progress:
                 report_progress(idx, total)
@@ -249,7 +249,7 @@ def export_project_to_ilda(
         if not pts_out:
             pts_out.append(IldaPoint(x=0, y=0, blanked=True, color_index=profile.base_color_index))
 
-        frames_out.append(IldaFrame(name=f"F{idx:04d}", company="LPIP", points=pts_out, projector=0))
+        frames_out.append(IldaFrame(header=IldaHeader(format_code=0, frame_name=f"F{idx:04d}", scanner_head=0), points=pts_out))
 
         if report_progress:
             report_progress(idx, total)

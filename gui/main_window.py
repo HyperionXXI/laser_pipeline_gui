@@ -263,6 +263,24 @@ class MainWindow(QMainWindow):
 
         prev4_group = QGroupBox("Prévisualisation ILDA")
         p4_layout = QVBoxLayout(prev4_group)
+        # Réglages de preview (n'affecte PAS l'export)
+        palette_row = QHBoxLayout()
+        palette_row.addWidget(QLabel("Palette preview :"))
+
+        self.combo_ilda_palette = QComboBox()
+        self.combo_ilda_palette.addItem("Auto", "auto")          # auto: palette par défaut côté core
+        self.combo_ilda_palette.addItem("IDTF 14 (64)", "idtf14")
+        self.combo_ilda_palette.addItem("ILDA 64", "ilda64")
+        self.combo_ilda_palette.addItem("White 63", "white63")
+        self.combo_ilda_palette.setToolTip(
+            "Palette utilisée uniquement pour la prévisualisation des formats indexés (ILDA 0/1). "
+            "Ignorée pour ILDA 5 (true-color)."
+        )
+        self.combo_ilda_palette.currentIndexChanged.connect(self._on_ilda_preview_palette_changed)
+
+        palette_row.addWidget(self.combo_ilda_palette, 1)
+        p4_layout.addLayout(palette_row)
+
         self.preview_ilda = RasterPreview()
         self.preview_ilda.setMinimumSize(240, 180)
         p4_layout.addWidget(self.preview_ilda)
@@ -541,12 +559,44 @@ class MainWindow(QMainWindow):
         if ilda_path is not None:
             out_png = preview_dir / "ilda_preview.png"
             try:
-                render_ilda_preview(ilda_path, out_png, frame_index=0)
+                render_ilda_preview(ilda_path, out_png, frame_index=0, palette_name=self._get_ilda_preview_palette_name())
                 self.preview_ilda.show_image(str(out_png))
                 self.log(f"[Preview] ILDA : {out_png}")
             except Exception as e:
                 self.log(f"[Preview] Impossible de générer la preview ILDA : {e}")
 
+
+    def _get_ilda_preview_palette_name(self) -> str:
+        """Return the palette key to use for ILDA previews.
+
+        Priority:
+          1) The UI dropdown (if present)
+          2) Environment variable ILDA_PREVIEW_PALETTE
+          3) Fallback default ("ilda64")
+        """
+        try:
+            combo = getattr(self, "combo_ilda_palette", None)
+            if combo is not None:
+                key = combo.currentData()
+                if isinstance(key, str) and key.strip():
+                    return key.strip()
+                txt = combo.currentText()
+                if isinstance(txt, str) and txt.strip():
+                    return txt.strip()
+        except Exception:
+            pass
+
+        import os
+        return os.getenv("ILDA_PREVIEW_PALETTE", "ilda64")
+
+    def _on_ilda_preview_palette_changed(self, _index: int) -> None:
+        """Re-render the currently selected ILDA preview frame when palette changes."""
+        # Reuse the existing preview refresh path; it already logs errors cleanly.
+        try:
+            self.on_preview_frame()
+        except Exception:
+            # Never let a palette change crash the GUI.
+            pass
     def on_preview_frame(self) -> None:
         project = (self.edit_project.text() or "").strip()
         if not project:
@@ -575,11 +625,7 @@ class MainWindow(QMainWindow):
             preview_dir.mkdir(parents=True, exist_ok=True)
             out_png = preview_dir / f"ilda_preview_{ui_frame:04d}.png"
             try:
-                render_ilda_preview(
-                    ilda_path,
-                    out_png,
-                    frame_index = max(0, ui_frame - 1)
-                )
+                render_ilda_preview(ilda_path, out_png, frame_index=max(0, ui_frame - 1), palette_name=self._get_ilda_preview_palette_name())
                 self.preview_ilda.show_image(str(out_png))
                 self.log(f"[Preview] ILDA frame {ui_frame} : {out_png}")
             except Exception as e:
