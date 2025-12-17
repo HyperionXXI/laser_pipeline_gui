@@ -24,7 +24,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Optional, Sequence, Tuple, Union
+from typing import Dict, Iterable, List, Optional, Sequence, Tuple, Union
 import os
 import struct
 
@@ -77,6 +77,8 @@ def palette_idtf14() -> List[RGB]:
                     break
                 pal[idx] = (r, g, b)
                 idx += 1
+            if idx >= 256:
+                break
         if idx >= 256:
             break
     return pal
@@ -93,13 +95,39 @@ def palette_white63() -> List[RGB]:
     return pal
 
 
-def get_palette_by_name(name: str) -> List[RGB]:
+def _normalize_palette_name(name: str) -> str:
     n = (name or "").strip().lower()
-    if n in ("idtf14", "idtf", "default"):
+    # aggressively normalize what GUI might send (e.g. "IDTF 14 (64)", "ilda64", etc.)
+    return (
+        n.replace(" ", "")
+        .replace("_", "")
+        .replace("-", "")
+        .replace("(", "")
+        .replace(")", "")
+    )
+
+
+def get_palette_by_name(name: str) -> List[RGB]:
+    """
+    Accepted palette names (case/format-insensitive):
+      - auto
+      - idtf14, idtf, default, idtf14(64), idtf1464, ilda64
+      - white63, white, mono, monochrome
+    """
+    key = _normalize_palette_name(name)
+
+    if key in ("auto", ""):
+        # "auto" is handled in render_ilda_preview (embedded palette if present),
+        # but returning a sane default here keeps the function side-effect free.
         return palette_idtf14()
-    if n in ("white63", "white", "mono", "monochrome"):
+
+    if key in ("idtf14", "idtf", "default", "idtf1464", "ilda64", "ilda"):
+        return palette_idtf14()
+
+    if key in ("white63", "white", "mono", "monochrome"):
         return palette_white63()
-    raise ValueError(f"Unknown palette '{name}' (supported: idtf14, white63)")
+
+    raise ValueError(f"Unknown palette '{name}' (supported: auto, idtf14, white63)")
 
 
 # -----------------------------
@@ -127,7 +155,6 @@ class IldaFrame:
     # - fmt 5: (x,y,status,r,g,b)
     points: List[tuple]
 
-    # Convenience accessors (handy for debugging and REPL sanity-checks)
     @property
     def format_code(self) -> int:
         return int(self.header.format_code)
@@ -194,7 +221,6 @@ def _parse_header(block: bytes) -> IldaHeader:
         total_frames=int(total_frames),
         scanner_head=int(scanner_head),
     )
-    
 
 
 def _record_size(fmt: int) -> Optional[int]:
@@ -213,16 +239,18 @@ def _record_size(fmt: int) -> Optional[int]:
 
 
 def _is_blanked(status: int) -> bool:
-    # ILDA "blanking" is commonly bit 6 (0x40). Some tools may also use 0x00/0x01;
-    # we keep it simple and standard.
+    # Standard ILDA blanking bit is 0x40
     return (status & 0x40) != 0
 
+
 def _is_last_point(status: int) -> bool:
-    """Return True if ILDA 'last point' bit is set (0x80)."""
+    # "Last point" bit is 0x80
     return (status & 0x80) != 0
+
 
 def _parse_records(fmt: int, data: bytes, count: int) -> List[tuple]:
     pts: List[tuple] = []
+
     if fmt == 0:
         rec = struct.Struct(">hhhBB")
         for i in range(count):
@@ -240,8 +268,7 @@ def _parse_records(fmt: int, data: bytes, count: int) -> List[tuple]:
         return pts
 
     if fmt == 4:
-        # x,y,z,status,r,g,b
-        rec = struct.Struct(">hhhBBBB")
+        rec = struct.Struct(">hhhBBBB")  # x,y,z,status,r,g,b
         for i in range(count):
             off = i * 10
             x, y, z, status, r, g, b = rec.unpack_from(data, off)
@@ -249,8 +276,7 @@ def _parse_records(fmt: int, data: bytes, count: int) -> List[tuple]:
         return pts
 
     if fmt == 5:
-        # x,y,status,r,g,b
-        rec = struct.Struct(">hhBBBB")
+        rec = struct.Struct(">hhBBBB")  # x,y,status,r,g,b
         for i in range(count):
             off = i * 8
             x, y, status, r, g, b = rec.unpack_from(data, off)
@@ -260,7 +286,9 @@ def _parse_records(fmt: int, data: bytes, count: int) -> List[tuple]:
     raise ValueError(f"Unsupported ILDA format {fmt}")
 
 
-def load_ilda_frames(ilda_path: Union[str, Path]) -> Tuple[List[IldaFrame], Optional[List[RGB]], Dict[str, int]]:
+def load_ilda_frames(
+    ilda_path: Union[str, Path]
+) -> Tuple[List[IldaFrame], Optional[List[RGB]], Dict[str, int]]:
     """
     Returns (frames, embedded_palette, format_counts).
 
@@ -278,12 +306,11 @@ def load_ilda_frames(ilda_path: Union[str, Path]) -> Tuple[List[IldaFrame], Opti
     pos = 0
     data_len = len(data)
 
-    # We scan for "ILDA" and parse sequentially.
+    # Scan for "ILDA" and parse sequentially.
     while True:
         idx = data.find(ILDA_MAGIC, pos)
         if idx < 0:
             break
-        # Need 32 bytes for header
         if idx + ILDA_HEADER_SIZE > data_len:
             break
 
@@ -298,10 +325,8 @@ def load_ilda_frames(ilda_path: Union[str, Path]) -> Tuple[List[IldaFrame], Opti
 
         rec_sz = _record_size(fmt)
         if rec_sz is None:
-            # skip unknown/unsupported blocks safely
-            # Still advance position as if the block was well formed, if possible.
-            payload_len = hdr.num_records * 0
-            pos = idx + ILDA_HEADER_SIZE
+            # Unknown format: don't guess payload length; just continue scanning safely.
+            pos = idx + 4
             continue
 
         payload_start = idx + ILDA_HEADER_SIZE
@@ -309,14 +334,13 @@ def load_ilda_frames(ilda_path: Union[str, Path]) -> Tuple[List[IldaFrame], Opti
         payload_end = payload_start + payload_len
 
         if payload_end > data_len:
-            # malformed: stop scanning after this header
+            # malformed: keep scanning after this signature
             pos = idx + 4
             continue
 
         payload = data[payload_start:payload_end]
 
         if fmt == 2:
-            # palette block: num_records entries of 3 bytes (r,g,b)
             pal = [(0, 0, 0)] * 256
             n = min(hdr.num_records, 256)
             for i in range(n):
@@ -327,7 +351,6 @@ def load_ilda_frames(ilda_path: Union[str, Path]) -> Tuple[List[IldaFrame], Opti
             pts = _parse_records(fmt, payload, hdr.num_records)
             frames.append(IldaFrame(header=hdr, points=pts))
 
-        # Continue scanning after this block's payload
         pos = payload_end
 
     return frames, embedded_palette, format_counts
@@ -337,24 +360,45 @@ def load_ilda_frames(ilda_path: Union[str, Path]) -> Tuple[List[IldaFrame], Opti
 # Rendering
 # -----------------------------
 
+def _iter_drawable_points(points: Sequence[tuple], fmt: int) -> Iterable[tuple]:
+    """
+    Yield points that are drawable (not blanked) with correct status extraction
+    for each supported format.
+    """
+    for p in points:
+        if fmt == 0:
+            # (x,y,z,status,cidx)
+            status = int(p[3])
+        elif fmt == 1:
+            # (x,y,status,cidx)
+            status = int(p[2])
+        elif fmt == 4:
+            # (x,y,z,status,r,g,b)
+            status = int(p[3])
+        elif fmt == 5:
+            # (x,y,status,r,g,b)
+            status = int(p[2])
+        else:
+            continue
+
+        if not _is_blanked(status):
+            yield p
+
+
 def _compute_bounds(points: Sequence[tuple], fmt: int) -> Tuple[int, int, int, int]:
-    # Return (minx, maxx, miny, maxy)
+    """
+    Return (minx, maxx, miny, maxy) from the given point tuples.
+    Assumes points contain x,y at indices [0],[1] for formats we support.
+    """
     if not points:
         return (0, 0, 0, 0)
 
     xs: List[int] = []
     ys: List[int] = []
 
-    if fmt in (0, 4):
-        for p in points:
-            xs.append(int(p[0]))
-            ys.append(int(p[1]))
-    elif fmt in (1, 5):
-        for p in points:
-            xs.append(int(p[0]))
-            ys.append(int(p[1]))
-    else:
-        return (0, 0, 0, 0)
+    for p in points:
+        xs.append(int(p[0]))
+        ys.append(int(p[1]))
 
     return (min(xs), max(xs), min(ys), max(ys))
 
@@ -364,15 +408,13 @@ def _map_xy(x: int, y: int, bounds: Tuple[int, int, int, int], size: int, margin
     spanx = max(1, maxx - minx)
     spany = max(1, maxy - miny)
 
-    # Keep aspect ratio (fit)
     scale = min((size - 2 * margin) / spanx, (size - 2 * margin) / spany)
 
     cx = (minx + maxx) / 2.0
     cy = (miny + maxy) / 2.0
 
     px = (x - cx) * scale + size / 2.0
-    # Invert Y for image coordinates
-    py = (-(y - cy)) * scale + size / 2.0
+    py = (-(y - cy)) * scale + size / 2.0  # invert Y for image coordinates
 
     return int(round(px)), int(round(py))
 
@@ -388,54 +430,40 @@ def render_frame_to_image(
     """
     Render a single ILDA frame into a PIL Image.
     """
-    fmt = frame.header.format_code
+    fmt = int(frame.header.format_code)
     pts = frame.points
 
     img = Image.new("RGB", (image_size, image_size), (0, 0, 0))
     draw = ImageDraw.Draw(img)
 
-
-    # avant: bounds = _compute_bounds(pts, fmt)
-    # après: filtrer seulement les points dessinables
-    def _iter_drawable_points(pts, fmt):
-        for p in pts:
-            if fmt == 0:
-                _x,_y,_z,status,_cidx = p
-            elif fmt == 1:
-                _x,_y,status,_cidx = p
-            elif fmt == 4:
-                _x,_y,_z,status,_r,_g,_b = p
-            elif fmt == 5:
-                _x,_y,status,_r,_g,_b = p
-            else:
-                continue
-            if not _is_blanked(status):
-                yield p
-
+    # Compute bounds preferentially from non-blanked points (prevents "compressed spaghetti").
     drawable_pts = list(_iter_drawable_points(pts, fmt))
-    bounds = _compute_bounds(drawable_pts if drawable_pts else pts, fmt)
-
+    bounds_src = drawable_pts if drawable_pts else pts
+    bounds = _compute_bounds(bounds_src, fmt)
 
     prev_xy: Optional[Tuple[int, int]] = None
     prev_drawable = False
-    prev_color: RGB = (255, 255, 255)
 
     for p in pts:
         if fmt == 0:
             x, y, _z, status, cidx = p
-            blanked = _is_blanked(status)
+            blanked = _is_blanked(int(status))
+            last_pt = _is_last_point(int(status))
             color = palette[int(cidx) & 0xFF]
         elif fmt == 1:
             x, y, status, cidx = p
-            blanked = _is_blanked(status)
+            blanked = _is_blanked(int(status))
+            last_pt = _is_last_point(int(status))
             color = palette[int(cidx) & 0xFF]
         elif fmt == 4:
             x, y, _z, status, r, g, b = p
-            blanked = _is_blanked(status)
+            blanked = _is_blanked(int(status))
+            last_pt = _is_last_point(int(status))
             color = (int(r) & 0xFF, int(g) & 0xFF, int(b) & 0xFF)
         elif fmt == 5:
             x, y, status, r, g, b = p
-            blanked = _is_blanked(status)
+            blanked = _is_blanked(int(status))
+            last_pt = _is_last_point(int(status))
             color = (int(r) & 0xFF, int(g) & 0xFF, int(b) & 0xFF)
         else:
             continue
@@ -443,24 +471,29 @@ def render_frame_to_image(
         xy = _map_xy(int(x), int(y), bounds, image_size, margin)
         drawable = not blanked
 
-        # draw segment
+        # Draw segment only if both endpoints are drawable.
+        # Use CURRENT point color for the segment (more intuitive for most viewers).
         if prev_xy is not None and prev_drawable and drawable:
-            draw.line([prev_xy, xy], fill=prev_color, width=line_width)
+            draw.line([prev_xy, xy], fill=color, width=line_width)
 
-
-        # draw point
+        # Draw point
         if drawable:
             x0, y0 = xy[0] - point_radius, xy[1] - point_radius
             x1, y1 = xy[0] + point_radius, xy[1] + point_radius
             draw.ellipse([x0, y0, x1, y1], fill=color)
 
+        # Update pen state
         if blanked:
             prev_xy = None
             prev_drawable = False
         else:
             prev_xy = xy
             prev_drawable = True
-            prev_color = color
+
+        # If "last point" bit is used as a polyline break, stop linking to next point.
+        if (not blanked) and last_pt:
+            prev_xy = None
+            prev_drawable = False
 
     return img
 
@@ -488,8 +521,10 @@ def render_ilda_preview(
     frame_index:
         1-based index (GUI-friendly). Values <=0 will be treated as 1.
     palette_name:
-        Palette for indexed formats (0/1). If None, uses env var ILDA_PREVIEW_PALETTE, else 'idtf14'.
+        Palette for indexed formats (0/1).
+        If None, uses env var ILDA_PREVIEW_PALETTE, else 'idtf14'.
         True-color formats (4/5) ignore this.
+        Accepts 'auto' to mean: embedded palette if present, else idtf14.
     image_size:
         Output PNG size (square).
     """
@@ -501,12 +536,10 @@ def render_ilda_preview(
     if not frames:
         known = ", ".join(sorted(fmt_counts.keys())) or "none"
         raise ValueError(
-            f"No supported ILDA geometry frames found in file. "
-            f"Formats seen in file: {known}. "
-            f"Supported: 0,1,4,5."
+            "No supported ILDA geometry frames found in file. "
+            f"Formats seen in file: {known}. Supported: 0,1,4,5."
         )
 
-    # 1-based indexing
     idx = int(frame_index) if frame_index is not None else 1
     if idx <= 0:
         idx = 1
@@ -514,14 +547,15 @@ def render_ilda_preview(
         idx = len(frames)
 
     frame = frames[idx - 1]
+    fmt = int(frame.header.format_code)
 
-    # Choose palette for indexed formats
-    if frame.header.format_code in (0, 1):
-        if embedded_palette is not None:
-            pal = embedded_palette
+    # Choose palette only for indexed formats
+    if fmt in (0, 1):
+        pal_choice = palette_name or os.getenv("ILDA_PREVIEW_PALETTE") or "idtf14"
+        if _normalize_palette_name(pal_choice) == "auto":
+            pal = embedded_palette if embedded_palette is not None else palette_idtf14()
         else:
-            pal_name = palette_name or os.getenv("ILDA_PREVIEW_PALETTE") or "idtf14"
-            pal = get_palette_by_name(pal_name)
+            pal = embedded_palette if embedded_palette is not None else get_palette_by_name(pal_choice)
     else:
         # true-color: palette irrelevant
         pal = palette_idtf14()
@@ -531,4 +565,3 @@ def render_ilda_preview(
     out_png.parent.mkdir(parents=True, exist_ok=True)
     img.save(out_png)
     return out_png
-
