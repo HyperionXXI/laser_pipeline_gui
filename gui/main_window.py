@@ -5,6 +5,7 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
+from PySide6.QtCore import Qt
 from PySide6.QtCore import Slot
 from PySide6.QtGui import QTextCursor, QAction
 from PySide6.QtWidgets import (
@@ -28,46 +29,33 @@ from PySide6.QtWidgets import (
     QMessageBox,
 )
 
+
 from core.config import PROJECTS_ROOT
 from core.pipeline.base import FrameProgress
 from core.ilda_preview import render_ilda_preview
 from .preview_widgets import RasterPreview, SvgPreview
 from .pipeline_controller import PipelineController
-
+from gui.ui.menu import setup_menus, MenuCallbacks
 
 class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
         self.setWindowTitle("Laser Pipeline GUI")
 
-        # --- Menu bar ---
-        menu = self.menuBar()
-
-        # File menu
-        file_menu = menu.addMenu("File")
-        open_action = QAction("Open Video...", self)
-        open_action.setShortcut("Ctrl+O")
-        open_action.triggered.connect(self.choose_video)
-        file_menu.addAction(open_action)
-
-        exit_action = QAction("Exit", self)
-        exit_action.setShortcut("Ctrl+Q")
-        exit_action.triggered.connect(self.close)
-        file_menu.addAction(exit_action)
-
-        # Project menu
-        proj_menu = menu.addMenu("Project")
-        new_proj_action = QAction("New Project...", self)
-        new_proj_action.setShortcut("Ctrl+N")
-        new_proj_action.triggered.connect(self.on_new_project)
-        proj_menu.addAction(new_proj_action)
-
-        # Help menu
-        help_menu = menu.addMenu("Help")
-        about_action = QAction("About", self)
-        about_action.setShortcut("F1")
-        about_action.triggered.connect(self.on_about)
-        help_menu.addAction(about_action)
+        setup_menus(
+            self,
+            MenuCallbacks(
+                on_new_project=self.on_new_project,
+                on_open_project=self.open_project,
+                on_open_video=self.choose_video,
+                on_clear_outputs=self.clear_project_outputs,
+                on_reveal_project=self.reveal_project_in_explorer,
+                on_refresh_previews=self.refresh_previews,
+                on_toggle_fullscreen=self.toggle_fullscreen,
+                on_about=self.on_about,
+                on_exit=self.close,
+            ),
+        )
 
         central = QWidget(self)
         self.setCentralWidget(central)
@@ -633,6 +621,8 @@ class MainWindow(QMainWindow):
         else:
             self.log("[Preview] Aucun fichier ILDA trouvé pour cette frame.")
 
+    def refresh_previews(self) -> None:
+        self.on_preview_frame()
 
     # ---------------- Full pipeline ------------------------------
 
@@ -674,6 +664,84 @@ class MainWindow(QMainWindow):
             max_frames=max_frames,
             ilda_mode=mode_key,
         )
+
+    def open_project(self) -> None:
+        root = str(PROJECTS_ROOT)
+        folder = QFileDialog.getExistingDirectory(self, "Ouvrir un projet", root)
+        if not folder:
+            return
+
+        try:
+            folder_path = Path(folder).resolve()
+            project_root = Path(PROJECTS_ROOT).resolve()
+            project_name = folder_path.name
+
+            # Option : si l’utilisateur a sélectionné directement PROJECTS_ROOT, on refuse
+            if folder_path == project_root:
+                self.log("[UI] Sélection invalide: veuillez choisir un sous-dossier de projects/.")
+                return
+
+            self.edit_project.setText(project_name)
+            self.log(f"[UI] Projet ouvert : {project_name}")
+            self.refresh_previews()
+        except Exception as e:
+            self.log(f"[UI] Open Project erreur : {e}")
+
+
+    def clear_project_outputs(self) -> None:
+        project = (self.edit_project.text() or "").strip()
+        if not project:
+            self.log("[UI] Clear outputs: projet vide.")
+            return
+
+        root = PROJECTS_ROOT / project
+        if not root.exists():
+            self.log(f"[UI] Clear outputs: dossier inexistant: {root}")
+            return
+
+        reply = QMessageBox.question(
+            self,
+            "Clear outputs",
+            f"Supprimer les outputs générés dans:\n{root}\n\n(Frames/BMP/SVG/preview/ilda)\n",
+            QMessageBox.Yes | QMessageBox.No,
+        )
+        if reply != QMessageBox.Yes:
+            return
+
+        deleted = 0
+        for sub in ("frames", "bmp", "svg", "preview", "ilda"):
+            d = root / sub
+            if not d.exists():
+                continue
+            for p in d.glob("*"):
+                try:
+                    if p.is_file():
+                        p.unlink()
+                        deleted += 1
+                except Exception:
+                    pass
+
+        self.log(f"[UI] Clear outputs: {deleted} fichiers supprimés.")
+        self.refresh_previews()
+
+        
+    def reveal_project_in_explorer(self) -> None:
+        project = (self.edit_project.text() or "").strip()
+        if not project:
+            self.log("[UI] Reveal: projet vide.")
+            return
+        path = PROJECTS_ROOT / project
+        if not path.exists():
+            self.log(f"[UI] Reveal: dossier inexistant: {path}")
+            return
+        try:
+            import os
+            os.startfile(str(path))
+        except Exception as e:
+            self.log(f"[UI] Reveal erreur : {e}")
+
+    def toggle_fullscreen(self) -> None:
+        self.setWindowState(self.windowState() ^ Qt.WindowState.WindowFullScreen)
 
 
 def run() -> None:
