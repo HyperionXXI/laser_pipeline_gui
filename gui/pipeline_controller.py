@@ -27,6 +27,7 @@ class _StepWorker(QObject):
         self._args = args
         self._kwargs = kwargs
         self._cancel_requested = False
+        self._announced_steps: set[str] = set()
 
     @Slot()
     def run(self) -> None:
@@ -51,6 +52,14 @@ class _StepWorker(QObject):
     def cancel(self) -> None:
         self._cancel_requested = True
 
+    def cancel_current_step(self) -> None:
+        if self._worker is not None:
+            self._log("[Pipeline] Annulation demandée…")
+            self._worker.cancel()
+        if self._thread is not None:
+            self._thread.requestInterruption()
+
+
 
 class PipelineController(QObject):
     """
@@ -72,7 +81,7 @@ class PipelineController(QObject):
         self._thread: Optional[QThread] = None
         self._worker: Optional[_StepWorker] = None
         self._current_step: Optional[str] = None
-
+        self._announced_steps: set[str] = set()
     # ------------------------------------------------------------------
     # Gestion générique d'un step
     # ------------------------------------------------------------------
@@ -89,6 +98,7 @@ class PipelineController(QObject):
 
         self._log(f"[Pipeline] Démarrage step '{step_name}'...")
         self._current_step = step_name
+        self._announced_steps = {step_name}
 
         thread = QThread(self)
         worker = _StepWorker(step_func, *args, **kwargs)
@@ -121,7 +131,15 @@ class PipelineController(QObject):
         def on_progress(fp: FrameProgress) -> None:
             # Propager le step_name réel s'il est fourni par le step (ex: full_pipeline -> arcade_lines)
             effective = fp.step_name or step_name
+
+            # Émettre un "started" synthétique pour les sous-steps (utile pour la trace UI / anti-régression)
+            if effective not in self._announced_steps:
+                self._announced_steps.add(effective)
+                self._log(f"[Pipeline] Sous-step détecté: '{effective}' (via progress)")
+                self.step_started.emit(effective)
+
             self.step_progress.emit(effective, fp)
+
 
         worker.finished.connect(on_finished)
         worker.error.connect(on_error)
@@ -208,7 +226,4 @@ class PipelineController(QObject):
             ilda_mode,
         )
 
-    def cancel_current_step(self) -> None:
-        if self._worker is not None:
-            self._log("[Pipeline] Annulation demandée…")
-            self._worker.cancel()
+
