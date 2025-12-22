@@ -72,9 +72,9 @@ class MainWindow(QMainWindow):
         row_video.addWidget(QLabel("Vidéo source :"))
         self.edit_video_path = QLineEdit()
         row_video.addWidget(self.edit_video_path)
-        btn_browse = QPushButton("Parcourir…")
-        btn_browse.clicked.connect(self.choose_video)
-        row_video.addWidget(btn_browse)
+        self.btn_browse_video = QPushButton("Parcourir…")
+        self.btn_browse_video.clicked.connect(self.choose_video)
+        row_video.addWidget(self.btn_browse_video)
         gen_layout.addLayout(row_video)
 
         # Ligne projet
@@ -94,9 +94,9 @@ class MainWindow(QMainWindow):
         gen_layout.addLayout(row_fps)
 
         # Bouton test
-        btn_test = QPushButton("Tester les paramètres")
-        btn_test.clicked.connect(self.on_test_click)
-        gen_layout.addWidget(btn_test)
+        self.btn_test = QPushButton("Tester les paramètres")
+        self.btn_test.clicked.connect(self.on_test_click)
+        gen_layout.addWidget(self.btn_test)
 
         main_layout.addWidget(general_group)
 
@@ -322,6 +322,10 @@ class MainWindow(QMainWindow):
 
         run_enabled = not busy
 
+        self.btn_test.setEnabled(run_enabled)
+        self.combo_ilda_palette.setEnabled(run_enabled)
+        self.btn_browse_video.setEnabled(run_enabled)
+
         # Boutons pipeline
         self.btn_run_all.setEnabled(run_enabled)
         self.btn_ffmpeg.setEnabled(run_enabled)
@@ -347,6 +351,8 @@ class MainWindow(QMainWindow):
 
     @Slot(str, object)
     def on_step_finished(self, step_name: str, result: object) -> None:
+        self.progress_bar.setRange(0, 100)
+        self.progress_bar.setValue(100)
         self.set_busy(False)
         msg = getattr(result, "message", "")
         if msg:
@@ -359,6 +365,8 @@ class MainWindow(QMainWindow):
 
     @Slot(str, str)
     def on_step_error(self, step_name: str, message: str) -> None:
+        self.progress_bar.setRange(0, 100)
+        self.progress_bar.setValue(100)
         self.set_busy(False)
         self.log(f"[{step_name}] ERREUR : {message}")
 
@@ -370,12 +378,23 @@ class MainWindow(QMainWindow):
 
         if fp.total_frames is not None and fp.total_frames > 0:
             self.progress_bar.setRange(0, 100)
+
+            total = int(fp.total_frames)
             idx = int(fp.frame_index)
+
             if idx < 0:
                 idx = 0
-            if idx > fp.total_frames:
-                idx = fp.total_frames
-            pct = int(idx * 100 / fp.total_frames)
+
+            # Supporte 0-based (0..total-1) et 1-based (1..total)
+            if idx < total:
+                processed = idx + 1
+            else:
+                processed = idx
+
+            if processed > total:
+                processed = total
+
+            pct = int(processed * 100 / total)
             self.progress_bar.setValue(pct)
         else:
             self.progress_bar.setRange(0, 0)
@@ -513,7 +532,7 @@ class MainWindow(QMainWindow):
             return
         self.btn_cancel.setEnabled(False)
         self.btn_cancel.setText("Annulation…")
-        self.log("[UI] Annulation demandée…")
+        self.log("[UI] Annulation demandée… (attente arrêt du step)")
         self.pipeline.cancel_current_step()
 
     # ---------------- Preview helpers ----------------------------
