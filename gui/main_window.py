@@ -741,8 +741,10 @@ class MainWindow(QMainWindow):
             self.log(f"[UI] Reveal erreur : {e}")
 
     def toggle_fullscreen(self) -> None:
-        self.setWindowState(self.windowState() ^ Qt.WindowState.WindowFullScreen)
-
+        if self.isFullScreen():
+            self.showNormal()
+        else:
+            self.showFullScreen()
 
 def run() -> None:
     app = QApplication(sys.argv)
