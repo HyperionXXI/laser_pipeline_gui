@@ -52,12 +52,7 @@ class _StepWorker(QObject):
     def cancel(self) -> None:
         self._cancel_requested = True
 
-    def cancel_current_step(self) -> None:
-        if self._worker is not None:
-            self._log("[Pipeline] Annulation demandée…")
-            self._worker.cancel()
-        if self._thread is not None:
-            self._thread.requestInterruption()
+
 
 
 
@@ -226,4 +221,9 @@ class PipelineController(QObject):
             ilda_mode,
         )
 
-
+    def cancel_current_step(self) -> None:
+        if self._worker is not None:
+            self._log("[Pipeline] Annulation demandée…")
+            self._worker.cancel()
+        if self._thread is not None:
+            self._thread.requestInterruption()
