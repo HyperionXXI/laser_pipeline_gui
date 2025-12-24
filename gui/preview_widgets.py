@@ -49,8 +49,13 @@ class RasterPreview(QWidget):
         self.clear()
 
     # --- API attendue par main_window.py ---
-    def show_image(self, path: PathLike) -> None:
+    # --- Compat API (older main_window code) ---
+    def show_image(self, path: str) -> None:
         self.set_path(path)
+
+    def clear_image(self) -> None:
+        self.clear_preview()
+
 
     def set_path(self, path: Optional[PathLike]) -> None:
         if path is None:
