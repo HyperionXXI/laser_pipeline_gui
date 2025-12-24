@@ -53,8 +53,14 @@ class RasterPreview(QWidget):
     def show_image(self, path: str) -> None:
         self.set_path(path)
 
+    def clear_preview(self) -> None:
+        """Compat alias: some callers use clear_preview()."""
+        self.clear()
+
     def clear_image(self) -> None:
+        """Compat alias: some callers use clear_image()."""
         self.clear_preview()
+
 
 
     def set_path(self, path: Optional[PathLike]) -> None:
@@ -165,6 +171,17 @@ class SvgPreview(QWidget):
         self._label.setToolTip("")
         self._label.setPixmap(QPixmap())
 
+    def show_svg(self, path: PathLike) -> None:
+        """Compat alias: MainWindow calls show_svg()."""
+        self.set_path(path)
+
+    def clear_preview(self) -> None:
+        """Compat alias."""
+        self.clear()
+
+    def clear_image(self) -> None:
+        self.clear()
+
     def resizeEvent(self, event) -> None:  # noqa: N802
         super().resizeEvent(event)
         self._rerender()
@@ -188,3 +205,5 @@ class SvgPreview(QWidget):
 
         pm = QPixmap.fromImage(img)
         self._label.setPixmap(pm)
+
+    
