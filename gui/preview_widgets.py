@@ -1,112 +1,185 @@
+# gui/preview_widgets.py
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Optional, Union
 
-from PySide6.QtCore import Qt, QRectF
-from PySide6.QtGui import QPainter, QPixmap, QPaintEvent
+from PySide6.QtCore import Qt, QSize
+from PySide6.QtGui import QImage, QPainter, QPixmap
 from PySide6.QtSvg import QSvgRenderer
-from PySide6.QtWidgets import QWidget
+from PySide6.QtWidgets import QLabel, QSizePolicy, QVBoxLayout, QWidget
+
+
+PathLike = Union[str, Path]
+
+
+@dataclass
+class PreviewState:
+    path: Optional[Path] = None
 
 
 class RasterPreview(QWidget):
     """
-    Widget simple pour afficher une image raster (PNG, BMP, etc.)
-    centrée et en conservant le ratio.
+    Widget de preview raster (PNG/BMP/preview ILDA rendu en PNG, etc.)
+    - Toujours expansible (layout-friendly)
+    - Affiche un fond noir même si aucune image
+    - Rescale proprement au resize (KeepAspectRatio)
     """
 
-    def __init__(self, parent: QWidget | None = None) -> None:
+    def __init__(self, *, min_size: QSize = QSize(240, 160), parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
-        self._pixmap = QPixmap()
-        self.setMinimumSize(240, 180)
 
-    def show_image(self, path: str | Path) -> None:
-        """Charge et affiche une image raster à partir d'un chemin."""
-        self._pixmap = QPixmap(str(path))
-        self.update()
+        self._state = PreviewState()
+        self._pixmap_src: Optional[QPixmap] = None
 
-    def paintEvent(self, event: QPaintEvent) -> None:  # type: ignore[override]
-        painter = QPainter(self)
+        self._label = QLabel(self)
+        self._label.setAlignment(Qt.AlignCenter)
+        self._label.setStyleSheet("background: #000; border: 1px solid #333;")
+        self._label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self._label.setMinimumSize(min_size)
 
-        # Fond noir pour bien contraster avec les traits clairs
-        painter.fillRect(self.rect(), Qt.black)
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.addWidget(self._label)
 
-        if self._pixmap.isNull():
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.setMinimumSize(min_size)
+
+        self.clear()
+
+    # --- API attendue par main_window.py ---
+    def show_image(self, path: PathLike) -> None:
+        self.set_path(path)
+
+    def set_path(self, path: Optional[PathLike]) -> None:
+        if path is None:
+            self.clear()
             return
 
-        # Mise à l'échelle en conservant le ratio, centrée
-        scaled = self._pixmap.scaled(
-            self.size(),
-            Qt.KeepAspectRatio,
-            Qt.SmoothTransformation,
-        )
-        x = (self.width() - scaled.width()) // 2
-        y = (self.height() - scaled.height()) // 2
-        painter.drawPixmap(x, y, scaled)
+        p = Path(path)
+        self._state.path = p
+
+        if not p.exists():
+            self._pixmap_src = None
+            self._label.setToolTip(f"Fichier introuvable: {p}")
+            self._label.setPixmap(QPixmap())  # pixmap null, mais fond noir reste
+            return
+
+        pm = QPixmap(str(p))
+        if pm.isNull():
+            self._pixmap_src = None
+            self._label.setToolTip(f"Impossible de charger l'image: {p}")
+            self._label.setPixmap(QPixmap())
+            return
+
+        self._pixmap_src = pm
+        self._label.setToolTip(str(p))
+        self._apply_scaled_pixmap()
+
+    def clear(self) -> None:
+        self._state.path = None
+        self._pixmap_src = None
+        self._label.setToolTip("")
+        self._label.setPixmap(QPixmap())  # fond noir via stylesheet
+
+    def resizeEvent(self, event) -> None:  # noqa: N802
+        super().resizeEvent(event)
+        self._apply_scaled_pixmap()
+
+    def _apply_scaled_pixmap(self) -> None:
+        # Si pas d'image, on laisse la pixmap null; le fond noir + layout font le “stretch”
+        if self._pixmap_src is None or self._pixmap_src.isNull():
+            return
+
+        target = self._label.size()
+        if target.width() <= 2 or target.height() <= 2:
+            return
+
+        scaled = self._pixmap_src.scaled(target, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+        self._label.setPixmap(scaled)
 
 
 class SvgPreview(QWidget):
     """
-    Widget pour afficher un SVG via QSvgRenderer.
-
-    - Fond noir (cohérent avec les traits blancs / colorés).
-    - Rapport largeur/hauteur toujours respecté.
-    - Contenu centré et mis à l'échelle pour occuper au mieux la zone,
-      sans aucune déformation.
-
-    Aucun traitement lourd : la preview reste très légère et ne
-    ralentit pas Potrace / ILDA.
+    Preview SVG (rendu raster dans le QLabel) avec scaling au resize.
     """
 
-    def __init__(self, parent: QWidget | None = None) -> None:
+    def __init__(self, *, min_size: QSize = QSize(240, 160), parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
-        self._renderer = QSvgRenderer(self)
-        self.setMinimumSize(240, 180)
 
-    def show_svg(self, path: str | Path) -> None:
-        """Charge et affiche un SVG à partir d'un chemin."""
-        self._renderer.load(str(path))
-        self.update()
+        self._state = PreviewState()
+        self._renderer: Optional[QSvgRenderer] = None
 
-    def paintEvent(self, event: QPaintEvent) -> None:  # type: ignore[override]
-        painter = QPainter(self)
+        self._label = QLabel(self)
+        self._label.setAlignment(Qt.AlignCenter)
+        self._label.setStyleSheet("background: #000; border: 1px solid #333;")
+        self._label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self._label.setMinimumSize(min_size)
 
-        # Fond noir pour voir correctement les traits
-        painter.fillRect(self.rect(), Qt.black)
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.addWidget(self._label)
 
-        if not self._renderer.isValid():
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.setMinimumSize(min_size)
+
+        self.clear()
+
+    def show_image(self, path: PathLike) -> None:
+        self.set_path(path)
+
+    def set_path(self, path: Optional[PathLike]) -> None:
+        if path is None:
+            self.clear()
             return
 
-        widget_w = self.width()
-        widget_h = self.height()
-        if widget_w <= 0 or widget_h <= 0:
+        p = Path(path)
+        self._state.path = p
+
+        if not p.exists():
+            self._renderer = None
+            self._label.setToolTip(f"Fichier introuvable: {p}")
+            self._label.setPixmap(QPixmap())
             return
 
-        view_box: QRectF = self._renderer.viewBoxF()
-        if view_box.isEmpty():
-            # Rendu brut si le SVG n'a pas de viewBox exploitable
+        r = QSvgRenderer(str(p))
+        if not r.isValid():
+            self._renderer = None
+            self._label.setToolTip(f"SVG invalide: {p}")
+            self._label.setPixmap(QPixmap())
+            return
+
+        self._renderer = r
+        self._label.setToolTip(str(p))
+        self._rerender()
+
+    def clear(self) -> None:
+        self._state.path = None
+        self._renderer = None
+        self._label.setToolTip("")
+        self._label.setPixmap(QPixmap())
+
+    def resizeEvent(self, event) -> None:  # noqa: N802
+        super().resizeEvent(event)
+        self._rerender()
+
+    def _rerender(self) -> None:
+        if self._renderer is None:
+            return
+
+        target = self._label.size()
+        if target.width() <= 2 or target.height() <= 2:
+            return
+
+        img = QImage(target, QImage.Format_ARGB32)
+        img.fill(0x00000000)  # transparent; fond noir vient du stylesheet
+
+        painter = QPainter(img)
+        try:
             self._renderer.render(painter)
-            return
+        finally:
+            painter.end()
 
-        vw = view_box.width()
-        vh = view_box.height()
-        if vw <= 0 or vh <= 0:
-            self._renderer.render(painter)
-            return
-
-        aspect_view = vw / vh
-        aspect_widget = widget_w / widget_h
-
-        # Rectangle cible avec même ratio que la viewBox, centré.
-        if aspect_widget > aspect_view:
-            target_h = float(widget_h)
-            target_w = target_h * aspect_view
-            x = (widget_w - target_w) / 2.0
-            y = 0.0
-        else:
-            target_w = float(widget_w)
-            target_h = target_w / aspect_view
-            x = 0.0
-            y = (widget_h - target_h) / 2.0
-
-        target_rect = QRectF(x, y, target_w, target_h)
-        self._renderer.render(painter, target_rect)
+        pm = QPixmap.fromImage(img)
+        self._label.setPixmap(pm)

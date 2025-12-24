@@ -101,13 +101,13 @@ class PipelinePanel(QWidget):
         self.btn_ffmpeg = QPushButton("Lancer FFmpeg")
         s1_layout.addWidget(self.btn_ffmpeg)
         s1_layout.addStretch()
-        col1.addWidget(step1_group)
+        col1.addWidget(step1_group, 0)
 
         prev1_group = QGroupBox("Prévisualisation PNG")
         p1_layout = QVBoxLayout(prev1_group)
         self.preview_png = RasterPreview()
         p1_layout.addWidget(self.preview_png)
-        col1.addWidget(prev1_group)
+        col1.addWidget(prev1_group, 1)
 
         col1_widget = QWidget()
         col1_widget.setLayout(col1)
@@ -142,13 +142,13 @@ class PipelinePanel(QWidget):
         self.btn_bmp = QPushButton("Lancer conversion BMP")
         s2_layout.addWidget(self.btn_bmp)
         s2_layout.addStretch()
-        col2.addWidget(step2_group)
+        col2.addWidget(step2_group, 0)
 
         prev2_group = QGroupBox("Prévisualisation BMP")
         p2_layout = QVBoxLayout(prev2_group)
         self.preview_bmp = RasterPreview()
         p2_layout.addWidget(self.preview_bmp)
-        col2.addWidget(prev2_group)
+        col2.addWidget(prev2_group, 1)
 
         col2_widget = QWidget()
         col2_widget.setLayout(col2)
@@ -162,13 +162,13 @@ class PipelinePanel(QWidget):
         self.btn_potrace = QPushButton("Lancer Potrace")
         s3_layout.addWidget(self.btn_potrace)
         s3_layout.addStretch()
-        col3.addWidget(step3_group)
+        col3.addWidget(step3_group, 0)
 
         prev3_group = QGroupBox("Prévisualisation SVG")
         p3_layout = QVBoxLayout(prev3_group)
         self.preview_svg = SvgPreview()
         p3_layout.addWidget(self.preview_svg)
-        col3.addWidget(prev3_group)
+        col3.addWidget(prev3_group, 1)
 
         col3_widget = QWidget()
         col3_widget.setLayout(col3)
@@ -192,7 +192,7 @@ class PipelinePanel(QWidget):
         self.btn_ilda = QPushButton("Exporter ILDA")
         s4_layout.addWidget(self.btn_ilda)
         s4_layout.addStretch()
-        col4.addWidget(step4_group)
+        col4.addWidget(step4_group, 0)
 
         prev4_group = QGroupBox("Prévisualisation ILDA")
         p4_layout = QVBoxLayout(prev4_group)
@@ -209,7 +209,7 @@ class PipelinePanel(QWidget):
 
         self.preview_ilda = RasterPreview()
         p4_layout.addWidget(self.preview_ilda)
-        col4.addWidget(prev4_group)
+        col4.addWidget(prev4_group, 1)
 
         col4_widget = QWidget()
         col4_widget.setLayout(col4)
