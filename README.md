@@ -1,6 +1,7 @@
 # Laser Pipeline GUI  
 _Interface graphique de traitement laser / Laser processing GUI_
 
+![Aperçu de l'interface](docs/images/gui_overview.png)
 ---
 
 ## Aperçu / Overview
