@@ -1,10 +1,13 @@
+# core/pipeline/full_pipeline_step.py
 from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Callable, Optional
+import inspect
 
-from core.pipeline.base import CancelCallback, ProgressCallback, StepResult
+from core.config import PROJECTS_ROOT
+from core.pipeline.base import FrameProgress, ProgressCallback, StepResult, CancelCallback
 
 from core.pipeline.ffmpeg_step import run_ffmpeg_step
 from core.pipeline.bitmap_step import run_bitmap_step
@@ -18,16 +21,9 @@ class _Params:
     video_path: Path
     project: str
     fps: int
-
-    # bitmap / classic
     threshold: int
     use_thinning: bool
     max_frames: int  # 0 = all
-    fit_axis: str
-    fill_ratio: float
-    min_rel_size: float
-
-    # mode
     ilda_mode: str
     arcade_params: Optional[dict[str, Any]]
 
@@ -36,33 +32,40 @@ def _is_cancelled(cancel_cb: Optional[CancelCallback]) -> bool:
     return bool(cancel_cb and cancel_cb())
 
 
-def _coerce_arcade_params(obj: Any) -> dict[str, Any]:
+def _wrap_progress(
+    step_name: str,
+    progress_cb: Optional[ProgressCallback],
+) -> Optional[ProgressCallback]:
     """
-    Robustesse: certains callers peuvent passer autre chose qu'un dict (ex: dataclass).
-    On tente dict -> __dict__ -> {}.
+    Garantit que fp.step_name est renseigné (sans dépendre du fait que chaque step le fasse).
     """
-    if obj is None:
-        return {}
-    if isinstance(obj, dict):
-        return dict(obj)
-    d = getattr(obj, "__dict__", None)
-    if isinstance(d, dict):
-        return dict(d)
-    return {}
+    if progress_cb is None:
+        return None
+
+    def _cb(fp: FrameProgress) -> None:
+        try:
+            if not getattr(fp, "step_name", None):
+                fp.step_name = step_name  # type: ignore[attr-defined]
+        except Exception:
+            # Si FrameProgress est immuable dans une variante, on laisse passer tel quel.
+            pass
+        progress_cb(fp)
+
+    return _cb
 
 
-_ALLOWED_ARCADE_KW: set[str] = {
-    # run_arcade_lines_step kwargs (except project, fps, max_frames, kpps, ppf_ratio)
-    "max_points_per_frame",
-    "fill_ratio",
-    "canny1",
-    "canny2",
-    "blur_ksize",
-    "min_poly_len",
-    "simplify_eps",
-    "sample_color",
-    "invert_y",
-}
+def _frames_dir(project: str) -> Path:
+    return Path(PROJECTS_ROOT) / project / "frames"
+
+
+def _find_png_frames(project: str) -> list[Path]:
+    d = _frames_dir(project)
+    if not d.exists():
+        return []
+    frames = sorted(d.glob("frame_*.png"))
+    if frames:
+        return frames
+    return sorted(d.glob("*.png"))
 
 
 def run_full_pipeline_step(
@@ -71,16 +74,12 @@ def run_full_pipeline_step(
     fps: int,
     threshold: int = 60,
     use_thinning: bool = False,
-    max_frames: int | None = 0,
-    fit_axis: str = "both",
-    fill_ratio: float = 0.95,
-    min_rel_size: float = 0.01,
+    max_frames: int = 0,
     ilda_mode: str = "classic",
     arcade_params: Optional[dict[str, Any]] = None,
     progress_cb: Optional[ProgressCallback] = None,
     cancel_cb: Optional[CancelCallback] = None,
-    # Compat: certains anciens callers utilisent thinning=... au lieu de use_thinning=...
-    # et/ou max_frames=None (UI) au lieu de 0 (core)
+    # compat: anciens callers (thinning=...) etc.
     **_compat: Any,
 ) -> StepResult:
     """
@@ -89,16 +88,15 @@ def run_full_pipeline_step(
     - Classic : FFmpeg -> Bitmap -> Potrace -> ILDA
     - Arcade  : FFmpeg -> arcade_lines (et on s'arrête là)
 
-    Compat:
-    - On accepte thinning=... via **_compat.
-    - On accepte max_frames=None (UI) : traité comme "toutes" => 0.
+    Points importants (stabilité):
+    - N’importe aucun module fantôme.
+    - Ne passe max_frames à run_ffmpeg_step que si son API l’accepte.
+    - max_frames = 0 signifie "toutes".
     """
 
+    # Compat: thinning=... -> use_thinning
     if "thinning" in _compat and "use_thinning" not in _compat:
         use_thinning = bool(_compat["thinning"])
-
-    # None (UI) => 0 ("toutes") pour les steps classic
-    max_frames_i = 0 if (max_frames is None) else int(max_frames)
 
     p = _Params(
         video_path=Path(video_path),
@@ -106,53 +104,65 @@ def run_full_pipeline_step(
         fps=int(fps),
         threshold=int(threshold),
         use_thinning=bool(use_thinning),
-        max_frames=max_frames_i,
-        fit_axis=str(fit_axis),
-        fill_ratio=float(fill_ratio),
-        min_rel_size=float(min_rel_size),
+        max_frames=int(max_frames) if max_frames is not None else 0,
         ilda_mode=str(ilda_mode),
-        arcade_params=arcade_params,
+        arcade_params=dict(arcade_params) if arcade_params else None,
     )
+
+    if _is_cancelled(cancel_cb):
+        return StepResult(False, "Annulé.")
 
     # ----------------------------
     # Step 1: FFmpeg (always)
     # ----------------------------
-    if _is_cancelled(cancel_cb):
-        return StepResult(False, "Annulé.")
+    ffmpeg_kwargs: dict[str, Any] = {
+        "video_path": p.video_path,
+        "project": p.project,
+        "fps": p.fps,
+        "progress_cb": _wrap_progress("ffmpeg", progress_cb),
+        "cancel_cb": cancel_cb,
+    }
 
-    ffmpeg_res = run_ffmpeg_step(
-        str(p.video_path),
-        p.project,
-        p.fps,
-        progress_cb=progress_cb,
-        cancel_cb=cancel_cb,
-    )
+    # Passe max_frames à FFmpeg UNIQUEMENT si l'API le supporte (anti-régression).
+    try:
+        sig = inspect.signature(run_ffmpeg_step)
+        if "max_frames" in sig.parameters:
+            ffmpeg_kwargs["max_frames"] = (None if p.max_frames == 0 else p.max_frames)
+    except Exception:
+        # Si signature() échoue pour une raison quelconque, on n'envoie rien.
+        pass
+
+    ffmpeg_res = run_ffmpeg_step(**ffmpeg_kwargs)
     if not ffmpeg_res.success:
         return StepResult(False, f"Echec FFmpeg: {ffmpeg_res.message}")
 
-    # ----------------------------
-    # Arcade branch: Step 2 = arcade_lines only
-    # ----------------------------
+    png_frames = _find_png_frames(p.project)
+    if not png_frames:
+        return StepResult(
+            False,
+            f"Aucune frame PNG trouvée après FFmpeg. Attendu dans: {_frames_dir(p.project)}",
+        )
+
     mode = p.ilda_mode.strip().lower()
+
+    # ----------------------------
+    # Arcade branch
+    # ----------------------------
     if mode == "arcade":
         if _is_cancelled(cancel_cb):
             return StepResult(False, "Annulé.")
 
-        # UI: max_frames=None => toutes les frames.
-        # arcade_lines_step: None => toutes les frames.
-        arcade_max_frames: int | None = None if (max_frames is None or max_frames_i == 0) else max_frames_i
+        extra = dict(p.arcade_params or {})
 
-        extra = _coerce_arcade_params(p.arcade_params)
+        # Valeurs robustes par défaut (tu peux les surcharger via arcade_params)
+        # 60 kpps = souhait exprimé
+        kpps = int(extra.pop("kpps", 60))
+        ppf_ratio = float(extra.pop("ppf_ratio", 0.90))
+        invert_y = bool(extra.pop("invert_y", False))
+        sample_color = bool(extra.pop("sample_color", True))
 
-        # Valeurs par défaut (modifiable plus tard via arcade_params/UI Expert)
-        kpps = int(extra.pop("kpps", 60))          # 60kpps par défaut
-        ppf_ratio = float(extra.pop("ppf_ratio", 0.75))
-
-        # Filtrer les kwargs inconnus pour éviter des crashs "unexpected keyword argument"
-        filtered: dict[str, Any] = {}
-        for k in list(extra.keys()):
-            if k in _ALLOWED_ARCADE_KW:
-                filtered[k] = extra[k]
+        # 0 ("toutes") -> None (API arcade_lines_step)
+        arcade_max_frames: Optional[int] = None if p.max_frames == 0 else p.max_frames
 
         arcade_res = run_arcade_lines_step(
             p.project,
@@ -160,16 +170,18 @@ def run_full_pipeline_step(
             max_frames=arcade_max_frames,
             kpps=kpps,
             ppf_ratio=ppf_ratio,
-            progress_cb=progress_cb,
+            sample_color=sample_color,
+            invert_y=invert_y,
+            progress_cb=_wrap_progress("arcade_lines", progress_cb),
             cancel_cb=cancel_cb,
-            **filtered,
+            **extra,
         )
         if not arcade_res.success:
             return StepResult(False, f"Echec Arcade: {arcade_res.message}")
         return arcade_res
 
     # ----------------------------
-    # Classic pipeline: Bitmap -> Potrace -> ILDA
+    # Classic pipeline
     # ----------------------------
     if _is_cancelled(cancel_cb):
         return StepResult(False, "Annulé.")
@@ -178,12 +190,8 @@ def run_full_pipeline_step(
         p.project,
         threshold=p.threshold,
         use_thinning=p.use_thinning,
-        max_frames=p.max_frames,
-        fit_axis=p.fit_axis,
-        fill_ratio=p.fill_ratio,
-        min_rel_size=p.min_rel_size,
-        ilda_mode="classic",
-        progress_cb=progress_cb,
+        max_frames=(None if p.max_frames == 0 else p.max_frames),
+        progress_cb=_wrap_progress("bitmap", progress_cb),
         cancel_cb=cancel_cb,
     )
     if not bitmap_res.success:
@@ -194,8 +202,8 @@ def run_full_pipeline_step(
 
     potrace_res = run_potrace_step(
         p.project,
-        max_frames=p.max_frames,
-        progress_cb=progress_cb,
+        max_frames=(None if p.max_frames == 0 else p.max_frames),
+        progress_cb=_wrap_progress("potrace", progress_cb),
         cancel_cb=cancel_cb,
     )
     if not potrace_res.success:
@@ -206,11 +214,9 @@ def run_full_pipeline_step(
 
     ilda_res = run_ilda_step(
         p.project,
-        fit_axis=p.fit_axis,
-        fill_ratio=p.fill_ratio,
-        min_rel_size=p.min_rel_size,
-        max_frames=p.max_frames,
-        progress_cb=progress_cb,
+        mode="classic",
+        max_frames=(None if p.max_frames == 0 else p.max_frames),
+        progress_cb=_wrap_progress("ilda", progress_cb),
         cancel_cb=cancel_cb,
     )
     if not ilda_res.success:

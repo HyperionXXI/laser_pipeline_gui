@@ -270,24 +270,52 @@ def _norm_xy(
     return xn, yn
 
 
-def _sample_rgb_along_poly(img_bgr: Optional[np.ndarray], poly: List[Tuple[int, int]]) -> Tuple[int, int, int]:
-    # échantillonne quelques points -> couleur médiane
-    if img_bgr is None or len(poly) == 0:
-        return (255, 255, 255)
-    h, w = img_bgr.shape[:2]
-    idxs = np.linspace(0, len(poly) - 1, num=min(15, len(poly)), dtype=int)
-    samples = []
-    for i in idxs:
-        x, y = poly[i]
-        if 0 <= x < w and 0 <= y < h:
-            b, g, r = img_bgr[y, x]
-            samples.append((int(r), int(g), int(b)))
-    if not samples:
-        return (255, 255, 255)
-    arr = np.array(samples, dtype=np.int32)
-    med = np.median(arr, axis=0).astype(int)
-    return (int(med[0]), int(med[1]), int(med[2]))
+def _sample_rgb_along_poly(img_bgr, poly, step: int = 6, radius: int = 1):
+    """
+    Sample color along polyline:
+    - take points every `step`
+    - for each point, look at a (2r+1)x(2r+1) window
+    - pick the brightest pixel in that window to avoid background
+    - aggregate via median (robust)
+    """
+    import numpy as np
 
+    if img_bgr is None or poly is None or len(poly) < 2:
+        return 255, 255, 255
+
+    h, w = img_bgr.shape[:2]
+    samples = []
+
+    pts = poly[:: max(1, int(step))]
+    for (x, y) in pts:
+        xi = int(round(x))
+        yi = int(round(y))
+        if xi < 0 or yi < 0 or xi >= w or yi >= h:
+            continue
+
+        x0 = max(0, xi - radius)
+        x1 = min(w - 1, xi + radius)
+        y0 = max(0, yi - radius)
+        y1 = min(h - 1, yi + radius)
+
+        patch = img_bgr[y0 : y1 + 1, x0 : x1 + 1]  # BGR
+        if patch.size == 0:
+            continue
+
+        # Brightness = sum(B,G,R). Pick brightest pixel in patch.
+        flat = patch.reshape(-1, 3)
+        idx = int(np.argmax(flat.sum(axis=1)))
+        b, g, r = flat[idx]
+        samples.append((int(r), int(g), int(b)))  # convert to RGB
+
+    if not samples:
+        return 255, 255, 255
+
+    arr = np.array(samples, dtype=np.int32)
+    r = int(np.median(arr[:, 0]))
+    g = int(np.median(arr[:, 1]))
+    b = int(np.median(arr[:, 2]))
+    return r, g, b
 
 def _order_polylines(polylines: List[List[Tuple[int, int]]]) -> List[List[Tuple[int, int]]]:
     # greedy nearest-neighbor ordering (simple et efficace)
