@@ -7,31 +7,45 @@ from pathlib import Path
 from .config import FFMPEG_PATH, PROJECTS_ROOT
 
 
-def extract_frames(input_video: str, project_name: str, fps: int = 25) -> Path:
+def extract_frames(
+    input_video: Path,
+    project_name: str,
+    fps: int,
+    *,
+    max_frames: int = 0,  # 0 = toutes
+) -> Path:
     """
-    Extrait des frames PNG dans projects/<project>/frames/frame_%04d.png
-    """
-    project_root = PROJECTS_ROOT / project_name
-    frames_dir = project_root / "frames"
-    frames_dir.mkdir(parents=True, exist_ok=True)
+    Extrait les frames PNG de input_video dans:
+      projects/<project_name>/frames/frame_%04d.png
 
-    cmd = [
+    - fps: échantillonnage temporel (fps=25 -> 25 images/seconde)
+    - max_frames: 0 = toutes, sinon limite le nombre de frames extraites
+    """
+    input_video = Path(input_video)
+    if not input_video.exists():
+        raise FileNotFoundError(f"Vidéo introuvable: {input_video}")
+
+    out_dir = PROJECTS_ROOT / project_name / "frames"
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    out_pattern = out_dir / "frame_%04d.png"
+
+    cmd: list[str] = [
         str(FFMPEG_PATH),
+        "-y",
         "-hide_banner",
         "-loglevel",
         "error",
-        "-y",
         "-i",
-        input_video,
+        str(input_video),
         "-vf",
-        f"fps={fps}",
-        str(frames_dir / "frame_%04d.png"),
+        f"fps={int(fps)}",
     ]
 
-    try:
-        subprocess.run(cmd, check=True, capture_output=True, text=True)
-    except subprocess.CalledProcessError as e:
-        stderr = (e.stderr or "").strip()
-        raise RuntimeError(f"FFmpeg a échoué :\n{stderr}") from e
+    if int(max_frames) > 0:
+        cmd += ["-frames:v", str(int(max_frames))]
 
-    return frames_dir
+    cmd += [str(out_pattern)]
+
+    subprocess.run(cmd, check=True)
+    return out_dir
