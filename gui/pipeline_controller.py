@@ -1,156 +1,64 @@
 # gui/pipeline_controller.py
 from __future__ import annotations
 
+import threading
+from dataclasses import dataclass
 from typing import Callable, Optional
 
-from PySide6.QtCore import QObject, QThread, Signal, Slot
+from PySide6.QtCore import QObject, Signal
 
-from core.pipeline.ffmpeg_step import run_ffmpeg_step
-from core.pipeline.bitmap_step import run_bitmap_step
-from core.pipeline.potrace_step import run_potrace_step
-from core.pipeline.ilda_step import run_ilda_step
 from core.pipeline.base import FrameProgress, StepResult
+from core.pipeline.bitmap_step import run_bitmap_step
+from core.pipeline.ffmpeg_step import run_ffmpeg_step
 from core.pipeline.full_pipeline_step import run_full_pipeline_step
+from core.pipeline.ilda_step import run_ilda_step
+from core.pipeline.potrace_step import run_potrace_step
 
 
-LogFn = Callable[[str], None]
-
-
-class _StepWorker(QObject):
-    finished = Signal(object)   # StepResult
-    error = Signal(str)
-    progress = Signal(object)   # FrameProgress
-
-    def __init__(self, step_func: Callable[..., StepResult], *args, **kwargs) -> None:
-        super().__init__()
-        self._step_func = step_func
-        self._args = args
-        self._kwargs = kwargs
-        self._cancel_requested = False
-        self._announced_steps: set[str] = set()
-
-    @Slot()
-    def run(self) -> None:
-        try:
-            def cancel_cb() -> bool:
-                return self._cancel_requested
-
-            def progress_cb(fp: FrameProgress) -> None:
-                self.progress.emit(fp)
-
-            result = self._step_func(
-                *self._args,
-                progress_cb=progress_cb,
-                cancel_cb=cancel_cb,
-                **self._kwargs,
-            )
-        except Exception as e:
-            self.error.emit(str(e))
-        else:
-            self.finished.emit(result)
-
-    def cancel(self) -> None:
-        self._cancel_requested = True
-
-
-
+@dataclass(frozen=True)
+class _Task:
+    step_name: str
+    fn: Callable[[], StepResult]
 
 
 class PipelineController(QObject):
-    """
-    Contrôleur de pipeline : encapsule ffmpeg, bitmap, potrace, ilda, etc.
-    """
-
-    step_started = Signal(str)            # "ffmpeg", "bitmap", ...
-    step_finished = Signal(str, object)   # step_name, StepResult
-    step_error = Signal(str, str)         # step_name, message
-    step_progress = Signal(str, object)   # step_name, FrameProgress
+    step_started = Signal(str)
+    step_finished = Signal(str, object)
+    step_error = Signal(str, str)
+    step_progress = Signal(str, object)
 
     def __init__(
         self,
+        *,
         parent: Optional[QObject] = None,
-        log_fn: Optional[LogFn] = None,
+        log_fn: Optional[Callable[[str], None]] = None,
     ) -> None:
         super().__init__(parent)
-        self._log = log_fn or (lambda msg: None)
-        self._thread: Optional[QThread] = None
-        self._worker: Optional[_StepWorker] = None
-        self._current_step: Optional[str] = None
-        self._announced_steps: set[str] = set()
-    # ------------------------------------------------------------------
-    # Gestion générique d'un step
-    # ------------------------------------------------------------------
-    def _start_step(
-        self,
-        step_name: str,
-        step_func: Callable[..., StepResult],
-        *args,
-        **kwargs,
-    ) -> None:
-        if self._thread is not None:
-            self._log(f"[Pipeline] Un step est déjà en cours ({self._current_step}).")
+        self._log_fn = log_fn
+
+        self._thread: Optional[threading.Thread] = None
+        self._cancel_evt: Optional[threading.Event] = None
+        self._announced_substeps: set[str] = set()
+
+    def cancel_current_step(self) -> None:
+        if self._cancel_evt is None:
             return
+        self._cancel_evt.set()
+        self._log("[Pipeline] Annulation demandée…")
 
-        self._log(f"[Pipeline] Démarrage step '{step_name}'...")
-        self._current_step = step_name
-        self._announced_steps = {step_name}
-
-        thread = QThread(self)
-        worker = _StepWorker(step_func, *args, **kwargs)
-        worker.moveToThread(thread)
-
-        def cleanup() -> None:
-            # Stop the worker thread. Avoid waiting from within the same thread.
-            try:
-                thread.quit()
-                if QThread.currentThread() is not thread:
-                    thread.wait()
-            except Exception:
-                pass
-            worker.deleteLater()
-            thread.deleteLater()
-            self._thread = None
-            self._worker = None
-            self._current_step = None
-
-        def on_finished(result: StepResult) -> None:
-            self._log(f"[Pipeline] Step '{step_name}' terminé.")
-            self.step_finished.emit(step_name, result)
-            cleanup()
-
-        def on_error(message: str) -> None:
-            self._log(f"[Pipeline] ERREUR dans step '{step_name}' : {message}")
-            self.step_error.emit(step_name, message)
-            cleanup()
-
-        def on_progress(fp: FrameProgress) -> None:
-            # Propager le step_name réel s'il est fourni par le step (ex: full_pipeline -> arcade_lines)
-            effective = fp.step_name or step_name
-
-            # Émettre un "started" synthétique pour les sous-steps (utile pour la trace UI / anti-régression)
-            if effective not in self._announced_steps:
-                self._announced_steps.add(effective)
-                self._log(f"[Pipeline] Sous-step détecté: '{effective}' (via progress)")
-                self.step_started.emit(effective)
-
-            self.step_progress.emit(effective, fp)
-
-
-        worker.finished.connect(on_finished)
-        worker.error.connect(on_error)
-        worker.progress.connect(on_progress)
-        thread.started.connect(worker.run)
-
-        self._thread = thread
-        self._worker = worker
-        self.step_started.emit(step_name)
-        thread.start()
-
-    # ------------------------------------------------------------------
-    # API publique pour la GUI
-    # ------------------------------------------------------------------
     def start_ffmpeg(self, video_path: str, project: str, fps: int) -> None:
-        self._start_step("ffmpeg", run_ffmpeg_step, video_path, project, fps)
+        self._start_background(
+            _Task(
+                step_name="ffmpeg",
+                fn=lambda: run_ffmpeg_step(
+                    video_path,
+                    project,
+                    fps,
+                    progress_cb=self._make_progress_cb(top_step="ffmpeg"),
+                    cancel_cb=self._make_cancel_cb(),
+                ),
+            )
+        )
 
     def start_bitmap(
         self,
@@ -159,71 +67,147 @@ class PipelineController(QObject):
         use_thinning: bool,
         max_frames: Optional[int],
     ) -> None:
-        self._start_step(
-            "bitmap",
-            run_bitmap_step,
-            project,
-            threshold,
-            use_thinning,
-            max_frames,
+        # Step 2 UI = "PNG -> BMP (seuil)" => mode classic
+        self._start_background(
+            _Task(
+                step_name="bitmap",
+                fn=lambda: run_bitmap_step(
+                    project,
+                    threshold,
+                    use_thinning,
+                    max_frames,
+                    progress_cb=self._make_progress_cb(top_step="bitmap"),
+                    cancel_cb=self._make_cancel_cb(),
+                    mode="classic",
+                ),
+            )
         )
 
     def start_potrace(self, project: str) -> None:
-        self._start_step("potrace", run_potrace_step, project)
+        self._start_background(
+            _Task(
+                step_name="potrace",
+                fn=lambda: run_potrace_step(
+                    project,
+                    progress_cb=self._make_progress_cb(top_step="potrace"),
+                    cancel_cb=self._make_cancel_cb(),
+                ),
+            )
+        )
 
     def start_ilda(
         self,
         project: str,
+        *,
+        ilda_mode: str = "classic",
         fit_axis: str = "max",
         fill_ratio: float = 0.95,
         min_rel_size: float = 0.01,
-        ilda_mode: str = "classic",
     ) -> None:
-        self._start_step(
-            "ilda",
-            run_ilda_step,
-            project,
-            fit_axis,
-            fill_ratio,
-            min_rel_size,
-            ilda_mode,
+        self._start_background(
+            _Task(
+                step_name="ilda",
+                fn=lambda: run_ilda_step(
+                    project,
+                    fit_axis,
+                    fill_ratio,
+                    min_rel_size,
+                    ilda_mode,
+                    progress_cb=self._make_progress_cb(top_step="ilda"),
+                    cancel_cb=self._make_cancel_cb(),
+                ),
+            )
         )
 
     def start_full_pipeline(
         self,
+        *,
         video_path: str,
         project: str,
         fps: int,
         threshold: int,
         use_thinning: bool,
         max_frames: Optional[int],
-        fit_axis: str = "max",
-        fill_ratio: float = 0.95,
-        min_rel_size: float = 0.01,
         ilda_mode: str = "classic",
     ) -> None:
-        """
-        Lance l'exécution complète du pipeline (ffmpeg + bitmap + potrace + ilda)
-        dans un seul worker, pour que la GUI reste réactive.
-        """
-        self._start_step(
-            "full_pipeline",
-            run_full_pipeline_step,
-            video_path,
-            project,
-            fps,
-            threshold,
-            use_thinning,
-            max_frames,
-            fit_axis,
-            fill_ratio,
-            min_rel_size,
-            ilda_mode,
+        # UI: None (= toutes) -> 0
+        max_frames_int = 0 if (max_frames is None) else int(max_frames)
+
+        # Pour avancer: on force 60kpps en arcade (simple "User mode").
+        arcade_params: Optional[dict[str, object]] = None
+        if (ilda_mode or "").strip().lower() == "arcade":
+            arcade_params = {
+                "kpps": 60,
+                "invert_y": True,       # IMPORTANT: coord image -> coord ILDA
+                "sample_color": True,   # on veut des couleurs en arcade
+            }
+
+        self._start_background(
+            _Task(
+                step_name="full_pipeline",
+                fn=lambda: run_full_pipeline_step(
+                    video_path=video_path,
+                    project=project,
+                    fps=fps,
+                    threshold=threshold,
+                    use_thinning=use_thinning,
+                    max_frames=max_frames_int,
+                    ilda_mode=ilda_mode,
+                    arcade_params=arcade_params,
+                    progress_cb=self._make_progress_cb(top_step="full_pipeline"),
+                    cancel_cb=self._make_cancel_cb(),
+                ),
+            )
         )
 
-    def cancel_current_step(self) -> None:
-        if self._worker is not None:
-            self._log("[Pipeline] Annulation demandée…")
-            self._worker.cancel()
-        if self._thread is not None:
-            self._thread.requestInterruption()
+    # ---------------- Internals ----------------
+
+    def _log(self, msg: str) -> None:
+        if self._log_fn:
+            self._log_fn(msg)
+
+    def _make_cancel_cb(self) -> Callable[[], bool]:
+        def _cb() -> bool:
+            return bool(self._cancel_evt and self._cancel_evt.is_set())
+
+        return _cb
+
+    def _make_progress_cb(self, *, top_step: str) -> Callable[[FrameProgress], None]:
+        def _cb(fp: FrameProgress) -> None:
+            step_name = (fp.step_name or top_step).lower()
+
+            if top_step == "full_pipeline":
+                if step_name not in self._announced_substeps:
+                    self._announced_substeps.add(step_name)
+                    self._log(f"[Pipeline] Sous-step détecté: '{step_name}' (via progress)")
+                    self.step_started.emit(step_name)
+
+            self.step_progress.emit(step_name, fp)
+
+        return _cb
+
+    def _start_background(self, task: _Task) -> None:
+        if self._thread and self._thread.is_alive():
+            self._log("[Pipeline] Une tâche est déjà en cours (ignoring).")
+            return
+
+        self._cancel_evt = threading.Event()
+        self._announced_substeps = set()
+
+        self._log(f"[Pipeline] Démarrage step '{task.step_name}'...")
+        self.step_started.emit(task.step_name)
+
+        def _runner() -> None:
+            try:
+                res = task.fn()
+                self._log(f"[Pipeline] Step '{task.step_name}' terminé.")
+                self.step_finished.emit(task.step_name, res)
+            except Exception as exc:  # noqa: BLE001
+                self._log(f"[Pipeline] Step '{task.step_name}' erreur: {exc}")
+                self.step_error.emit(task.step_name, str(exc))
+            finally:
+                self._cancel_evt = None
+                self._thread = None
+
+        self._thread = threading.Thread(target=_runner, daemon=True)
+        self._thread.start()
