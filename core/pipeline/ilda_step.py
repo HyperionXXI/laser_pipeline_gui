@@ -10,13 +10,15 @@ from core.pipeline.base import StepResult, FrameProgress, ProgressCallback, Canc
 
 def run_ilda_step(
     project: str,
-    fit_axis: str,
-    fill_ratio: float,
-    min_rel_size: float,
-    mode: str,
+    fit_axis: str = "max",
+    fill_ratio: float = 0.95,
+    min_rel_size: float = 0.01,
+    mode: str = "classic",
     *,
     progress_cb: Optional[ProgressCallback] = None,
     cancel_cb: Optional[CancelCallback] = None,
+    # compat: callers may pass max_frames even though export currently ignores it
+    max_frames: Optional[int] = None,
 ) -> StepResult:
     step_name = "ilda"
 
