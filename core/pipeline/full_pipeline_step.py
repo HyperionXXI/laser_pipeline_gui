@@ -214,8 +214,10 @@ def run_full_pipeline_step(
 
     ilda_res = run_ilda_step(
         p.project,
+        fit_axis="max",
+        fill_ratio=0.95,
+        min_rel_size=0.01,
         mode="classic",
-        max_frames=(None if p.max_frames == 0 else p.max_frames),
         progress_cb=_wrap_progress("ilda", progress_cb),
         cancel_cb=cancel_cb,
     )

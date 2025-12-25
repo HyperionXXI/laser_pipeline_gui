@@ -86,6 +86,7 @@ def run_potrace_step(
     project: str,
     *,
     mode: str = "classic",
+    max_frames: Optional[int] = None,
     progress_cb: Optional[ProgressCallback] = None,
     cancel_cb: Optional[CancelCallback] = None,
 ) -> StepResult:
@@ -112,6 +113,8 @@ def run_potrace_step(
     # ------------------------------------------------------------
     if mode.lower() != "arcade":
         bmp_files = sorted(bmp_dir.glob("frame_[0-9][0-9][0-9][0-9].bmp"))
+        if max_frames is not None:
+            bmp_files = bmp_files[:max_frames]
         if not bmp_files:
             return StepResult(False, "Aucun BMP frame_XXXX.bmp trouvé pour Potrace.", svg_dir)
 
@@ -145,6 +148,8 @@ def run_potrace_step(
 
     manifest: Dict = json.loads(manifest_path.read_text(encoding="utf-8"))
     frames: List[Dict] = manifest.get("frames", [])
+    if max_frames is not None:
+        frames = frames[:max_frames]
     if not frames:
         return StepResult(False, "Manifest arcade vide (aucune frame).", svg_dir)
 
