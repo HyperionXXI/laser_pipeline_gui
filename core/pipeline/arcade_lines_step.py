@@ -346,6 +346,33 @@ def _order_polylines(polylines: List[List[Tuple[int, int]]]) -> List[List[Tuple[
     return ordered
 
 
+def _render_poly_preview(
+    polylines: List[List[Tuple[int, int]]],
+    img_bgr,
+    out_png: Path,
+    *,
+    preview_image_size: int,
+    sample_color: bool,
+) -> bool:
+    if img_bgr is None or getattr(img_bgr, "size", 0) == 0:
+        return False
+    h, w = img_bgr.shape[:2]
+    canvas = np.zeros((h, w, 3), dtype=np.uint8)
+    for poly in polylines:
+        if len(poly) < 2:
+            continue
+        pts = np.array(poly, dtype=np.int32).reshape((-1, 1, 2))
+        if sample_color:
+            r, g, b = _sample_rgb_along_poly(img_bgr, poly)
+            color = (b, g, r)
+        else:
+            color = (255, 255, 255)
+        cv2.polylines(canvas, [pts], isClosed=False, color=color, thickness=1, lineType=cv2.LINE_AA)
+    if preview_image_size and preview_image_size > 0:
+        canvas = cv2.resize(canvas, (preview_image_size, preview_image_size), interpolation=cv2.INTER_AREA)
+    return bool(cv2.imwrite(str(out_png), canvas))
+
+
 def run_arcade_lines_step(
     project: str,
     *,
@@ -362,6 +389,10 @@ def run_arcade_lines_step(
     simplify_eps: float = 1.2,
     sample_color: bool = False,
     invert_y: bool = False,
+    preview_every_n: int = 0,
+    preview_warmup_every_n: int = 0,
+    preview_warmup_frames: int = 0,
+    preview_image_size: int = 640,
     progress_cb: Optional[ProgressCallback] = None,
     cancel_cb: Optional[CancelCallback] = None,
 ) -> StepResult:
@@ -412,6 +443,21 @@ def run_arcade_lines_step(
     # on stocke aussi l'image BGR si sampling couleur
     bgr_cache: Dict[int, np.ndarray] = {}
 
+    preview_dir = project_root / "preview"
+    last_preview_png: Optional[Path] = None
+    preview_stride = int(preview_every_n) if preview_every_n is not None else 0
+    warmup_stride = int(preview_warmup_every_n) if preview_warmup_every_n is not None else 0
+    warmup_frames = int(preview_warmup_frames) if preview_warmup_frames is not None else 0
+    if preview_stride < 0:
+        preview_stride = 0
+    if warmup_stride < 0:
+        warmup_stride = 0
+    if warmup_frames < 0:
+        warmup_frames = 0
+    preview_enabled = (preview_stride > 0 or warmup_stride > 0)
+    if preview_enabled:
+        preview_dir.mkdir(parents=True, exist_ok=True)
+
     for idx, p in enumerate(pngs):
         if cancel_cb and cancel_cb():
             return StepResult(False, "Annulé.", project_root)
@@ -445,14 +491,45 @@ def run_arcade_lines_step(
 
         all_frames_polys.append(polylines)
 
+        preview_path: Optional[Path] = None
         if progress_cb:
+            do_preview = False
+            if preview_enabled:
+                if idx == 0:
+                    do_preview = True
+                elif warmup_stride > 0 and warmup_frames > 0 and (idx + 1) <= warmup_frames:
+                    do_preview = ((idx + 1) % warmup_stride == 0)
+                elif preview_stride > 0:
+                    do_preview = ((idx + 1) % preview_stride == 0)
+                if (idx + 1) == len(pngs):
+                    do_preview = True
+
+            if do_preview:
+                preview_path = preview_dir / f"arcade_preview_live_{idx + 1:04d}.png"
+                if _render_poly_preview(
+                    polylines,
+                    img_bgr,
+                    preview_path,
+                    preview_image_size=preview_image_size,
+                    sample_color=sample_color,
+                ):
+                    if last_preview_png is not None and last_preview_png != preview_path:
+                        try:
+                            if last_preview_png.exists():
+                                last_preview_png.unlink()
+                        except Exception:
+                            pass
+                    last_preview_png = preview_path
+                else:
+                    preview_path = None
+
             progress_cb(
                 FrameProgress(
                     step_name=step_name,
                     message=f"Frame {idx+1}/{len(pngs)}: polylines={len(polylines)}",
                     frame_index=idx + 1,
                     total_frames=len(pngs),
-                    frame_path=p,
+                    frame_path=preview_path,
                 )
             )
 

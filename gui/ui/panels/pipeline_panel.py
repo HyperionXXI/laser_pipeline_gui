@@ -97,31 +97,8 @@ This file also exposes Arcade parameters in the UI when the ILDA profile
         s2.addStretch(1)
         steps_row.addWidget(step2_group, 1)
 
-        # Step 3: Vectorization (Potrace)
-        step3_group = QGroupBox("3. Vectorization (Potrace)")
-        s3 = QVBoxLayout(step3_group)
-        self.btn_potrace = QPushButton("Run Potrace")
-        s3.addWidget(self.btn_potrace)
-        s3.addStretch(1)
-        steps_row.addWidget(step3_group, 1)
-
-        # Step 4: ILDA (export)
-        step4_group = QGroupBox("4. ILDA (export)")
-        s4 = QVBoxLayout(step4_group)
-
-        row_profile = QHBoxLayout()
-        row_profile.addWidget(QLabel("Profile:"))
-        self.combo_ilda_mode = QComboBox()
-        self.combo_ilda_mode.addItem("Classic (B/W)", "classic")
-        self.combo_ilda_mode.addItem("Arcade (experimental)", "arcade")
-        row_profile.addWidget(self.combo_ilda_mode)
-        s4.addLayout(row_profile)
-
-        self.btn_ilda = QPushButton("Export ILDA")
-        s4.addWidget(self.btn_ilda)
-
-        # --- Arcade parameters (shown only when profile == 'arcade') ---
-        self.grp_arcade_params = QGroupBox("Arcade parameters")
+        # Arcade / OpenCV parameters (shown only when profile == 'arcade')
+        self.grp_arcade_params = QGroupBox("Arcade (OpenCV)")
         grid = QGridLayout(self.grp_arcade_params)
 
         r = 0
@@ -193,7 +170,30 @@ This file also exposes Arcade parameters in the UI when the ILDA profile
         # little spacer at bottom of the grid (prevents "cramped" look)
         grid.setRowStretch(r, 1)
 
-        s4.addWidget(self.grp_arcade_params)
+        steps_row.addWidget(self.grp_arcade_params, 1)
+
+        # Step 3: Vectorization (Potrace)
+        step3_group = QGroupBox("3. Vectorization (Potrace)")
+        s3 = QVBoxLayout(step3_group)
+        self.btn_potrace = QPushButton("Run Potrace")
+        s3.addWidget(self.btn_potrace)
+        s3.addStretch(1)
+        steps_row.addWidget(step3_group, 1)
+
+        # Step 4: ILDA (export)
+        step4_group = QGroupBox("4. ILDA (export)")
+        s4 = QVBoxLayout(step4_group)
+
+        row_profile = QHBoxLayout()
+        row_profile.addWidget(QLabel("Profile:"))
+        self.combo_ilda_mode = QComboBox()
+        self.combo_ilda_mode.addItem("Classic (B/W)", "classic")
+        self.combo_ilda_mode.addItem("Arcade (experimental)", "arcade")
+        row_profile.addWidget(self.combo_ilda_mode)
+        s4.addLayout(row_profile)
+
+        self.btn_ilda = QPushButton("Export ILDA")
+        s4.addWidget(self.btn_ilda)
         s4.addStretch(1)
         steps_row.addWidget(step4_group, 1)
 

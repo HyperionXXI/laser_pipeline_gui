@@ -129,6 +129,9 @@ class PipelineController(QObject):
         arcade_params: Optional[dict[str, object]] = None,
     ) -> None:
         params = dict(arcade_params or {})
+        params.setdefault("preview_every_n", 5)
+        params.setdefault("preview_warmup_every_n", 2)
+        params.setdefault("preview_warmup_frames", 10)
         self._start_background(
             _Task(
                 step_name="arcade_lines",
@@ -168,6 +171,9 @@ class PipelineController(QObject):
                 "kpps": 60,
                 "invert_y": True,       # IMPORTANT: image coords -> ILDA coords
                 "sample_color": True,   # keep colors in arcade
+                "preview_every_n": 5,
+                "preview_warmup_every_n": 2,
+                "preview_warmup_frames": 10,
             }
             if arcade_params:
                 resolved_arcade_params.update(arcade_params)

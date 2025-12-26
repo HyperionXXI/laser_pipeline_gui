@@ -210,86 +210,8 @@ class MainWindow(QMainWindow):
         col2_widget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
         cols_layout.addWidget(col2_widget)
 
-        # Colonne SVG
-        col3 = QVBoxLayout()
-        self.step3_group = QGroupBox("3. Vectorization (Potrace)")
-        s3_layout = QVBoxLayout(self.step3_group)
-        self.btn_potrace = QPushButton("Run Potrace")
-        self.btn_potrace.clicked.connect(self.on_potrace_click)
-        s3_layout.addWidget(self.btn_potrace)
-        s3_layout.addStretch()
-        col3.addWidget(self.step3_group)
-
-        prev3_group = QGroupBox("SVG preview")
-        p3_layout = QVBoxLayout(prev3_group)
-        self.preview_svg = SvgPreview()
-        self.preview_svg.setMinimumSize(240, 180)
-        p3_layout.addWidget(self.preview_svg)
-        col3.addWidget(prev3_group)
-
-        col3_widget = QWidget()
-        col3_widget.setLayout(col3)
-        col3_widget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
-        cols_layout.addWidget(col3_widget)
-
-        # Colonne ILDA
-        col4 = QVBoxLayout()
-        step4_group = QGroupBox("4. ILDA (export)")
-        s4_layout = QVBoxLayout(step4_group)
-
-        row_mode = QHBoxLayout()
-        row_mode.addWidget(QLabel("Profile:"))
-        self.combo_ilda_mode = QComboBox()
-        self.combo_ilda_mode.addItem("Classic (B/W)", "classic")
-        self.combo_ilda_mode.addItem("Arcade (experimental)", "arcade")
-        self.combo_ilda_mode.setCurrentIndex(0)
-        row_mode.addWidget(self.combo_ilda_mode)
-        s4_layout.addLayout(row_mode)
-
-        self.btn_ilda = QPushButton("Export ILDA")
-        self.btn_ilda.clicked.connect(self.on_export_ilda_click)
-        s4_layout.addWidget(self.btn_ilda)
-        s4_layout.addStretch()
-        col4.addWidget(step4_group)
-
-        # Classic ILDA parameters (advanced)
-        self.grp_ilda_advanced = QGroupBox("ILDA Parameters (classic)")
-        ilda_adv_layout = QVBoxLayout(self.grp_ilda_advanced)
-
-        row_fit = QHBoxLayout()
-        row_fit.addWidget(QLabel("Fit axis :"))
-        self.combo_ilda_fit_axis = QComboBox()
-        self.combo_ilda_fit_axis.addItem("Max", "max")
-        self.combo_ilda_fit_axis.addItem("X", "x")
-        self.combo_ilda_fit_axis.addItem("Y", "y")
-        row_fit.addWidget(self.combo_ilda_fit_axis)
-        ilda_adv_layout.addLayout(row_fit)
-
-        row_fill = QHBoxLayout()
-        row_fill.addWidget(QLabel("Fill ratio :"))
-        self.spin_ilda_fill_ratio = QDoubleSpinBox()
-        self.spin_ilda_fill_ratio.setRange(0.1, 1.0)
-        self.spin_ilda_fill_ratio.setSingleStep(0.05)
-        self.spin_ilda_fill_ratio.setDecimals(3)
-        self.spin_ilda_fill_ratio.setValue(0.95)
-        row_fill.addWidget(self.spin_ilda_fill_ratio)
-        ilda_adv_layout.addLayout(row_fill)
-
-        row_min_rel = QHBoxLayout()
-        row_min_rel.addWidget(QLabel("Min relative size :"))
-        self.spin_ilda_min_rel_size = QDoubleSpinBox()
-        self.spin_ilda_min_rel_size.setRange(0.0, 0.5)
-        self.spin_ilda_min_rel_size.setSingleStep(0.005)
-        self.spin_ilda_min_rel_size.setDecimals(3)
-        self.spin_ilda_min_rel_size.setValue(0.01)
-        row_min_rel.addWidget(self.spin_ilda_min_rel_size)
-        ilda_adv_layout.addLayout(row_min_rel)
-
-        col4.addWidget(self.grp_ilda_advanced)
-
-
         # Arcade parameters (shown only in arcade mode)
-        self.grp_arcade_params = QGroupBox("Arcade parameters")
+        self.grp_arcade_params = QGroupBox("Arcade (OpenCV)")
         arcade_layout = QVBoxLayout(self.grp_arcade_params)
 
         row_kpps = QHBoxLayout()
@@ -380,10 +302,88 @@ class MainWindow(QMainWindow):
         row_arcade_fill.addWidget(self.spin_arcade_fill_ratio)
         arcade_layout.addLayout(row_arcade_fill)
 
-        col4.addWidget(self.grp_arcade_params)
+        cols_layout.addWidget(self.grp_arcade_params, 1)
 
-        prev4_group = QGroupBox("ILDA preview")
-        p4_layout = QVBoxLayout(prev4_group)
+        # Colonne SVG
+        col3 = QVBoxLayout()
+        self.step3_group = QGroupBox("3. Vectorization (Potrace)")
+        s3_layout = QVBoxLayout(self.step3_group)
+        self.btn_potrace = QPushButton("Run Potrace")
+        self.btn_potrace.clicked.connect(self.on_potrace_click)
+        s3_layout.addWidget(self.btn_potrace)
+        s3_layout.addStretch()
+        col3.addWidget(self.step3_group)
+
+        prev3_group = QGroupBox("SVG preview")
+        p3_layout = QVBoxLayout(prev3_group)
+        self.preview_svg = SvgPreview()
+        self.preview_svg.setMinimumSize(240, 180)
+        p3_layout.addWidget(self.preview_svg)
+        col3.addWidget(prev3_group)
+
+        col3_widget = QWidget()
+        col3_widget.setLayout(col3)
+        col3_widget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        cols_layout.addWidget(col3_widget)
+
+        # Colonne ILDA
+        col4 = QVBoxLayout()
+        step4_group = QGroupBox("4. ILDA (export)")
+        s4_layout = QVBoxLayout(step4_group)
+
+        row_mode = QHBoxLayout()
+        row_mode.addWidget(QLabel("Profile:"))
+        self.combo_ilda_mode = QComboBox()
+        self.combo_ilda_mode.addItem("Classic (B/W)", "classic")
+        self.combo_ilda_mode.addItem("Arcade (experimental)", "arcade")
+        self.combo_ilda_mode.setCurrentIndex(0)
+        row_mode.addWidget(self.combo_ilda_mode)
+        s4_layout.addLayout(row_mode)
+
+        self.btn_ilda = QPushButton("Export ILDA")
+        self.btn_ilda.clicked.connect(self.on_export_ilda_click)
+        s4_layout.addWidget(self.btn_ilda)
+        s4_layout.addStretch()
+        col4.addWidget(step4_group)
+
+        # Classic ILDA parameters (advanced)
+        self.grp_ilda_advanced = QGroupBox("ILDA Parameters (classic)")
+        ilda_adv_layout = QVBoxLayout(self.grp_ilda_advanced)
+
+        row_fit = QHBoxLayout()
+        row_fit.addWidget(QLabel("Fit axis :"))
+        self.combo_ilda_fit_axis = QComboBox()
+        self.combo_ilda_fit_axis.addItem("Max", "max")
+        self.combo_ilda_fit_axis.addItem("X", "x")
+        self.combo_ilda_fit_axis.addItem("Y", "y")
+        row_fit.addWidget(self.combo_ilda_fit_axis)
+        ilda_adv_layout.addLayout(row_fit)
+
+        row_fill = QHBoxLayout()
+        row_fill.addWidget(QLabel("Fill ratio :"))
+        self.spin_ilda_fill_ratio = QDoubleSpinBox()
+        self.spin_ilda_fill_ratio.setRange(0.1, 1.0)
+        self.spin_ilda_fill_ratio.setSingleStep(0.05)
+        self.spin_ilda_fill_ratio.setDecimals(3)
+        self.spin_ilda_fill_ratio.setValue(0.95)
+        row_fill.addWidget(self.spin_ilda_fill_ratio)
+        ilda_adv_layout.addLayout(row_fill)
+
+        row_min_rel = QHBoxLayout()
+        row_min_rel.addWidget(QLabel("Min relative size :"))
+        self.spin_ilda_min_rel_size = QDoubleSpinBox()
+        self.spin_ilda_min_rel_size.setRange(0.0, 0.5)
+        self.spin_ilda_min_rel_size.setSingleStep(0.005)
+        self.spin_ilda_min_rel_size.setDecimals(3)
+        self.spin_ilda_min_rel_size.setValue(0.01)
+        row_min_rel.addWidget(self.spin_ilda_min_rel_size)
+        ilda_adv_layout.addLayout(row_min_rel)
+
+        col4.addWidget(self.grp_ilda_advanced)
+
+
+        self.prev4_group = QGroupBox("ILDA preview")
+        p4_layout = QVBoxLayout(self.prev4_group)
         # Preview settings (does NOT affect export)
         palette_row = QHBoxLayout()
         palette_row.addWidget(QLabel("Preview palette:"))
@@ -406,7 +406,7 @@ class MainWindow(QMainWindow):
         self.preview_ilda = RasterPreview()
         self.preview_ilda.setMinimumSize(240, 180)
         p4_layout.addWidget(self.preview_ilda)
-        col4.addWidget(prev4_group)
+        col4.addWidget(self.prev4_group)
 
         col4_widget = QWidget()
         col4_widget.setLayout(col4)
@@ -489,6 +489,8 @@ class MainWindow(QMainWindow):
     def on_step_started(self, step_name: str) -> None:
         self.set_busy(True)
         self.log(f"[{step_name}] starting...")
+        if step_name == "arcade_lines":
+            self.prev4_group.setTitle("ILDA preview (live)")
 
     @Slot(str, object)
     def on_step_finished(self, step_name: str, result: object) -> None:
@@ -499,7 +501,10 @@ class MainWindow(QMainWindow):
         if msg:
             self.log(f"[{step_name}] {msg}")
 
-        if step_name in ("ilda", "full_pipeline") and getattr(result, "success", False):
+        if step_name in ("arcade_lines", "ilda", "full_pipeline"):
+            self.prev4_group.setTitle("ILDA preview")
+
+        if step_name in ("arcade_lines", "ilda", "full_pipeline") and getattr(result, "success", False):
             project = (self.edit_project.text() or "").strip()
             if project:
                 self._update_ilda_preview(project)
@@ -510,6 +515,8 @@ class MainWindow(QMainWindow):
         self.progress_bar.setValue(100)
         self.set_busy(False)
         self.log(f"[{step_name}] ERREUR : {message}")
+        if step_name in ("arcade_lines", "ilda", "full_pipeline"):
+            self.prev4_group.setTitle("ILDA preview")
 
     @Slot(str, object)
     def on_step_progress(self, step_name: str, payload: object) -> None:
@@ -553,7 +560,7 @@ class MainWindow(QMainWindow):
         elif step_name == "ilda":
             self.preview_ilda.show_image(path)
         elif step_name == "arcade_lines":
-            self.preview_png.show_image(path)
+            self.preview_ilda.show_image(path)
 
     # ---------------- Callbacks UI -------------------------------
 
@@ -771,6 +778,8 @@ class MainWindow(QMainWindow):
         is_arcade = str(mode).lower() == "arcade"
         self.grp_arcade_params.setVisible(is_arcade)
         self.grp_ilda_advanced.setVisible(not is_arcade)
+
+        self.btn_ilda.setText("Re-export from frames" if is_arcade else "Export ILDA")
 
         run_enabled = not self._ui_busy
         self.step2_group.setEnabled(run_enabled and not is_arcade)

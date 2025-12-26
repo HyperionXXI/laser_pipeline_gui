@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Optional, Union
 
 from PySide6.QtCore import Qt, QSize
-from PySide6.QtGui import QImage, QPainter, QPixmap
+from PySide6.QtGui import QImage, QPainter, QPixmap, QPixmapCache
 from PySide6.QtSvg import QSvgRenderer
 from PySide6.QtWidgets import QLabel, QSizePolicy, QVBoxLayout, QWidget
 
@@ -77,6 +77,7 @@ class RasterPreview(QWidget):
             self._label.setPixmap(QPixmap())  # null pixmap, black background remains
             return
 
+        QPixmapCache.remove(str(p))
         pm = QPixmap(str(p))
         if pm.isNull():
             self._pixmap_src = None
