@@ -112,6 +112,13 @@ def run_potrace_step(
     # CLASSIC : 1 BMP -> 1 SVG (frame_XXXX.bmp uniquement)
     # ------------------------------------------------------------
     if mode.lower() != "arcade":
+        # Nettoyage: éviter que d'anciens SVG faussent l'export ILDA.
+        for old_svg in svg_dir.glob("frame_*.svg"):
+            try:
+                old_svg.unlink()
+            except Exception:
+                pass
+
         bmp_files = sorted(bmp_dir.glob("frame_[0-9][0-9][0-9][0-9].bmp"))
         if max_frames is not None:
             bmp_files = bmp_files[:max_frames]

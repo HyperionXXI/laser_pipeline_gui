@@ -9,11 +9,11 @@ from PySide6.QtWidgets import QMainWindow
 
 @dataclass(frozen=True)
 class MenuCallbacks:
-    """Callbacks fournis par la fenêtre principale.
+    """Callbacks provided by the main window.
 
-    On garde ça très simple: la MainWindow expose déjà des méthodes,
-    et on les injecte ici pour éviter d'importer la MainWindow (dépendances circulaires).
-    """
+We keep this simple: the MainWindow already exposes methods,
+and we inject them here to avoid importing MainWindow (circular dependencies).
+"""
 
     on_new_project: Callable[[], None]
     on_open_project: Callable[[], None]
@@ -27,10 +27,10 @@ class MenuCallbacks:
 
 
 def build_menu(win: QMainWindow, cb: MenuCallbacks) -> None:
-    """Construit la barre de menus.
+    """Build the menu bar.
 
-    NOTE: pour compatibilité, on expose aussi setup_menus() et build_menus()
-    qui appellent cette fonction.
+    NOTE: for compatibility, we also expose setup_menus() and build_menus()
+    which call this function.
     """
     menu = win.menuBar()
 
@@ -86,7 +86,7 @@ def build_menu(win: QMainWindow, cb: MenuCallbacks) -> None:
     help_menu.addAction(act_about)
 
 
-# Compatibilité: noms utilisés dans les anciennes tentatives de refactor.
+# Compatibility: names used in earlier refactor attempts.
 def setup_menus(win: QMainWindow, cb: MenuCallbacks) -> None:
     build_menu(win, cb)
 

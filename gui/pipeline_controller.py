@@ -11,6 +11,7 @@ from core.pipeline.base import FrameProgress, StepResult
 from core.pipeline.bitmap_step import run_bitmap_step
 from core.pipeline.ffmpeg_step import run_ffmpeg_step
 from core.pipeline.full_pipeline_step import run_full_pipeline_step
+from core.pipeline.arcade_lines_step import run_arcade_lines_step
 from core.pipeline.ilda_step import run_ilda_step
 from core.pipeline.potrace_step import run_potrace_step
 
@@ -44,7 +45,7 @@ class PipelineController(QObject):
         if self._cancel_evt is None:
             return
         self._cancel_evt.set()
-        self._log("[Pipeline] Annulation demandée…")
+        self._log("[Pipeline] Cancel requested...")
 
     def start_ffmpeg(self, video_path: str, project: str, fps: int) -> None:
         self._start_background(
@@ -119,6 +120,29 @@ class PipelineController(QObject):
             )
         )
 
+    def start_arcade_lines(
+        self,
+        project: str,
+        *,
+        fps: int,
+        max_frames: Optional[int],
+        arcade_params: Optional[dict[str, object]] = None,
+    ) -> None:
+        params = dict(arcade_params or {})
+        self._start_background(
+            _Task(
+                step_name="arcade_lines",
+                fn=lambda: run_arcade_lines_step(
+                    project,
+                    fps=fps,
+                    max_frames=max_frames,
+                    progress_cb=self._make_progress_cb(top_step="arcade_lines"),
+                    cancel_cb=self._make_cancel_cb(),
+                    **params,
+                ),
+            )
+        )
+
     def start_full_pipeline(
         self,
         *,
@@ -129,18 +153,24 @@ class PipelineController(QObject):
         use_thinning: bool,
         max_frames: Optional[int],
         ilda_mode: str = "classic",
+        fit_axis: str = "max",
+        fill_ratio: float = 0.95,
+        min_rel_size: float = 0.01,
+        arcade_params: Optional[dict[str, object]] = None,
     ) -> None:
-        # UI: None (= toutes) -> 0
+        # UI: None (= all) -> 0
         max_frames_int = 0 if (max_frames is None) else int(max_frames)
 
-        # Pour avancer: on force 60kpps en arcade (simple "User mode").
-        arcade_params: Optional[dict[str, object]] = None
+        # For now: force 60kpps in arcade (simple "User mode").
+        resolved_arcade_params: Optional[dict[str, object]] = None
         if (ilda_mode or "").strip().lower() == "arcade":
-            arcade_params = {
+            resolved_arcade_params = {
                 "kpps": 60,
-                "invert_y": True,       # IMPORTANT: coord image -> coord ILDA
-                "sample_color": True,   # on veut des couleurs en arcade
+                "invert_y": True,       # IMPORTANT: image coords -> ILDA coords
+                "sample_color": True,   # keep colors in arcade
             }
+            if arcade_params:
+                resolved_arcade_params.update(arcade_params)
 
         self._start_background(
             _Task(
@@ -153,7 +183,10 @@ class PipelineController(QObject):
                     use_thinning=use_thinning,
                     max_frames=max_frames_int,
                     ilda_mode=ilda_mode,
-                    arcade_params=arcade_params,
+                    fit_axis=fit_axis,
+                    fill_ratio=fill_ratio,
+                    min_rel_size=min_rel_size,
+                    arcade_params=resolved_arcade_params,
                     progress_cb=self._make_progress_cb(top_step="full_pipeline"),
                     cancel_cb=self._make_cancel_cb(),
                 ),
@@ -179,7 +212,7 @@ class PipelineController(QObject):
             if top_step == "full_pipeline":
                 if step_name not in self._announced_substeps:
                     self._announced_substeps.add(step_name)
-                    self._log(f"[Pipeline] Sous-step détecté: '{step_name}' (via progress)")
+                    self._log(f"[Pipeline] Sub-step detected: '{step_name}' (via progress)")
                     self.step_started.emit(step_name)
 
             self.step_progress.emit(step_name, fp)
@@ -188,22 +221,22 @@ class PipelineController(QObject):
 
     def _start_background(self, task: _Task) -> None:
         if self._thread and self._thread.is_alive():
-            self._log("[Pipeline] Une tâche est déjà en cours (ignoring).")
+            self._log("[Pipeline] A task is already running (ignoring).")
             return
 
         self._cancel_evt = threading.Event()
         self._announced_substeps = set()
 
-        self._log(f"[Pipeline] Démarrage step '{task.step_name}'...")
+        self._log(f"[Pipeline] Starting step '{task.step_name}'...")
         self.step_started.emit(task.step_name)
 
         def _runner() -> None:
             try:
                 res = task.fn()
-                self._log(f"[Pipeline] Step '{task.step_name}' terminé.")
+                self._log(f"[Pipeline] Step '{task.step_name}' finished.")
                 self.step_finished.emit(task.step_name, res)
             except Exception as exc:  # noqa: BLE001
-                self._log(f"[Pipeline] Step '{task.step_name}' erreur: {exc}")
+                self._log(f"[Pipeline] Step '{task.step_name}' error: {exc}")
                 self.step_error.emit(task.step_name, str(exc))
             finally:
                 self._cancel_evt = None

@@ -76,6 +76,9 @@ def run_full_pipeline_step(
     use_thinning: bool = False,
     max_frames: int = 0,
     ilda_mode: str = "classic",
+    fit_axis: str = "max",
+    fill_ratio: float = 0.95,
+    min_rel_size: float = 0.01,
     arcade_params: Optional[dict[str, Any]] = None,
     progress_cb: Optional[ProgressCallback] = None,
     cancel_cb: Optional[CancelCallback] = None,
@@ -214,9 +217,9 @@ def run_full_pipeline_step(
 
     ilda_res = run_ilda_step(
         p.project,
-        fit_axis="max",
-        fill_ratio=0.95,
-        min_rel_size=0.01,
+        fit_axis=fit_axis,
+        fill_ratio=fill_ratio,
+        min_rel_size=min_rel_size,
         mode="classic",
         progress_cb=_wrap_progress("ilda", progress_cb),
         cancel_cb=cancel_cb,

@@ -21,10 +21,10 @@ class PreviewState:
 
 class RasterPreview(QWidget):
     """
-    Widget de preview raster (PNG/BMP/preview ILDA rendu en PNG, etc.)
-    - Toujours expansible (layout-friendly)
-    - Affiche un fond noir même si aucune image
-    - Rescale proprement au resize (KeepAspectRatio)
+    Raster preview widget (PNG/BMP/ILDA preview rendered to PNG, etc.).
+    - Always expandable (layout-friendly)
+    - Shows a black background even when no image is loaded
+    - Scales on resize (KeepAspectRatio)
     """
 
     def __init__(self, *, min_size: QSize = QSize(240, 160), parent: Optional[QWidget] = None) -> None:
@@ -48,7 +48,7 @@ class RasterPreview(QWidget):
 
         self.clear()
 
-    # --- API attendue par main_window.py ---
+        # --- API expected by main_window.py ---
     # --- Compat API (older main_window code) ---
     def show_image(self, path: str) -> None:
         self.set_path(path)
@@ -73,14 +73,14 @@ class RasterPreview(QWidget):
 
         if not p.exists():
             self._pixmap_src = None
-            self._label.setToolTip(f"Fichier introuvable: {p}")
-            self._label.setPixmap(QPixmap())  # pixmap null, mais fond noir reste
+            self._label.setToolTip(f"File not found: {p}")
+            self._label.setPixmap(QPixmap())  # null pixmap, black background remains
             return
 
         pm = QPixmap(str(p))
         if pm.isNull():
             self._pixmap_src = None
-            self._label.setToolTip(f"Impossible de charger l'image: {p}")
+            self._label.setToolTip(f"Failed to load image: {p}")
             self._label.setPixmap(QPixmap())
             return
 
@@ -92,14 +92,14 @@ class RasterPreview(QWidget):
         self._state.path = None
         self._pixmap_src = None
         self._label.setToolTip("")
-        self._label.setPixmap(QPixmap())  # fond noir via stylesheet
+        self._label.setPixmap(QPixmap())  # black background via stylesheet
 
     def resizeEvent(self, event) -> None:  # noqa: N802
         super().resizeEvent(event)
         self._apply_scaled_pixmap()
 
     def _apply_scaled_pixmap(self) -> None:
-        # Si pas d'image, on laisse la pixmap null; le fond noir + layout font le “stretch”
+        # If no image, keep a null pixmap; black background + layout do the stretch.
         if self._pixmap_src is None or self._pixmap_src.isNull():
             return
 
@@ -113,7 +113,7 @@ class RasterPreview(QWidget):
 
 class SvgPreview(QWidget):
     """
-    Preview SVG (rendu raster dans le QLabel) avec scaling au resize.
+    SVG preview (rasterized in the QLabel) with resize scaling.
     """
 
     def __init__(self, *, min_size: QSize = QSize(240, 160), parent: Optional[QWidget] = None) -> None:
