@@ -101,6 +101,8 @@ class MainWindow(QMainWindow):
         self.pipeline_panel.btn_preview_frame.clicked.connect(
             self.pipeline_ui.on_preview_frame
         )
+        self.pipeline_panel.btn_play.clicked.connect(self.pipeline_ui.on_play_click)
+        self.pipeline_panel.btn_stop.clicked.connect(self.pipeline_ui.on_stop_click)
         self.pipeline_panel.btn_run_all.clicked.connect(
             self.pipeline_ui.on_execute_all_task
         )

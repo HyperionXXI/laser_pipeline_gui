@@ -41,6 +41,9 @@ class PipelineUiController:
     def set_busy(self, busy: bool) -> None:
         run_enabled = not busy
 
+        if busy:
+            self._preview_controller.stop_play()
+
         self._general_panel.btn_test.setEnabled(run_enabled)
         self._general_panel.btn_browse_video.setEnabled(run_enabled)
         self._preview_controller.set_palette_enabled(run_enabled)
@@ -134,7 +137,7 @@ class PipelineUiController:
             self._log("FFmpeg error: project name is empty.")
             return
 
-        self._log("[FFmpeg] Starting frame extraction...")
+        self._log("[FFmpeg] Computing frame extraction...")
         self._pipeline_service.start_ffmpeg(settings.general)
 
     def on_bmp_click(self) -> None:
@@ -148,7 +151,7 @@ class PipelineUiController:
         max_frames = settings.general.max_frames
 
         self._log(
-            f"[BMP] Converting PNG -> BMP (threshold={threshold}%, "
+            f"[BMP] Computing PNG -> BMP (threshold={threshold}%, "
             f"thinning={thinning}, max_frames={max_frames or 'all'})..."
         )
         self._pipeline_service.start_bitmap(settings.general, threshold, thinning)
@@ -163,7 +166,7 @@ class PipelineUiController:
             self._log("Arcade error: current profile is not arcade.")
             return
         mode_label = self._pipeline_panel.combo_ilda_mode.currentText()
-        self._log(f"[Arcade] Export ILDA from PNG frames (profile={mode_label})...")
+        self._log(f"[Arcade] Computing ILDA from PNG frames (profile={mode_label})...")
         self._pipeline_service.start_arcade_reexport(settings.general, settings.ilda)
 
     def on_potrace_click(self) -> None:
@@ -171,7 +174,7 @@ class PipelineUiController:
         if not project:
             self._log("Potrace error: project name is empty.")
             return
-        self._log(f"[Potrace] Vectorizing BMP -> SVG for '{project}'...")
+        self._log(f"[Potrace] Computing BMP -> SVG for '{project}'...")
         self._pipeline_service.start_potrace(project)
 
     def on_export_ilda_click(self) -> None:
@@ -183,11 +186,13 @@ class PipelineUiController:
         mode_key = settings.ilda.mode
         mode_label = self._pipeline_panel.combo_ilda_mode.currentText()
         if str(mode_key).lower() == "arcade":
-            self._log(f"[Arcade] Export ILDA from PNG frames (profile={mode_label})...")
+            self._log(
+                f"[Arcade] Computing ILDA from PNG frames (profile={mode_label})..."
+            )
             self._pipeline_service.start_arcade_reexport(settings.general, settings.ilda)
             return
 
-        self._log(f"[ILDA] Export ILDA (profile={mode_label})...")
+        self._log(f"[ILDA] Computing ILDA (profile={mode_label})...")
         self._pipeline_service.start_ilda_export(
             settings.general.project,
             settings.ilda.classic,
@@ -217,7 +222,7 @@ class PipelineUiController:
         mode_key = settings.ilda.mode
         mode_label = self._pipeline_panel.combo_ilda_mode.currentText()
 
-        self._log("Starting full pipeline (4 steps)...")
+        self._log("Computing full pipeline...")
         self._log(f"  Video   : {settings.general.video_path}")
         self._log(f"  Project : {settings.general.project}")
         self._log(f"  FPS     : {settings.general.fps}")
@@ -228,6 +233,12 @@ class PipelineUiController:
         self._log(f"  ILDA    : profile={mode_label} ({mode_key})")
 
         self._pipeline_service.start_full_pipeline(settings)
+
+    def on_play_click(self) -> None:
+        self._preview_controller.toggle_play()
+
+    def on_stop_click(self) -> None:
+        self._preview_controller.stop_play()
 
     def on_preview_frame(self) -> None:
         self._preview_controller.show_current_frame()

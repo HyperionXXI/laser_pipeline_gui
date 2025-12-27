@@ -25,7 +25,7 @@ def _run_potrace_bmp_to_svg(
     Convertit un BMP binaire (noir sur blanc) en SVG via potrace.
     """
     if cancel_cb and cancel_cb():
-        raise RuntimeError("Annulé")
+        raise RuntimeError("Canceled")
 
     svg_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -128,7 +128,7 @@ def run_potrace_step(
         total = len(bmp_files)
         for i, bmp_path in enumerate(bmp_files, start=1):
             if cancel_cb and cancel_cb():
-                return StepResult(False, "Vectorisation annulée.", svg_dir)
+                return StepResult(False, "Vectorization canceled.", svg_dir)
 
             out_svg = svg_dir / f"{bmp_path.stem}.svg"
             _run_potrace_bmp_to_svg(bmp_path, out_svg, cancel_cb=cancel_cb)
@@ -144,7 +144,7 @@ def run_potrace_step(
                     )
                 )
 
-        return StepResult(True, f"SVG générés dans : {svg_dir}", svg_dir)
+        return StepResult(True, f"SVG computed in: {svg_dir}", svg_dir)
 
     # ------------------------------------------------------------
     # ARCADE : vectorisation par couche + fusion XML correcte + data-rgb
@@ -164,7 +164,7 @@ def run_potrace_step(
 
     for i, frame in enumerate(frames, start=1):
         if cancel_cb and cancel_cb():
-            return StepResult(False, "Vectorisation annulée.", svg_dir)
+            return StepResult(False, "Vectorization canceled.", svg_dir)
 
         frame_id = frame["frame"]  # ex: frame_0001
 
@@ -204,4 +204,4 @@ def run_potrace_step(
                 )
             )
 
-    return StepResult(True, f"SVG arcade générés dans : {svg_dir}", svg_dir)
+    return StepResult(True, f"Arcade SVG computed in: {svg_dir}", svg_dir)

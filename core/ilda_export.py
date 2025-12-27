@@ -123,7 +123,7 @@ def export_project_to_ilda(
     report_progress: Optional[Callable[[int, int], None]] = None,
 ) -> Path:
     """
-    Export ILDA depuis les SVG.
+    Compute ILDA from SVGs.
     - classic: indexed (format 0)
     - arcade: truecolor (format 5) via data-rgb sur les <path>
     """
@@ -158,7 +158,7 @@ def export_project_to_ilda(
 
         for idx, svg_path in enumerate(svg_files):
             if check_cancel and check_cancel():
-                raise RuntimeError("Export ILDA annulé")
+                raise RuntimeError("ILDA computation canceled")
 
             tree = ET.parse(svg_path)
             root = tree.getroot()
@@ -207,7 +207,7 @@ def export_project_to_ilda(
     # ------------------------------------------------------------------
     svg_files = sorted(svg_dir.glob("frame_*.svg"))
     if not svg_files:
-        raise RuntimeError("Aucun SVG trouvé pour l'export ILDA.")
+        raise RuntimeError("No SVG found for ILDA computation.")
 
     center, scale = _compute_global_normalization(svg_files)
 
@@ -216,7 +216,7 @@ def export_project_to_ilda(
 
     for idx, svg_path in enumerate(svg_files):
         if check_cancel and check_cancel():
-            raise RuntimeError("Export ILDA annulé")
+            raise RuntimeError("ILDA computation canceled")
 
         tree = ET.parse(svg_path)
         root = tree.getroot()

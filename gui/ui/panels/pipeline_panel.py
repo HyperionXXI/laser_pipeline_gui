@@ -39,6 +39,19 @@ class PipelinePanel(QGroupBox):
 
         self.btn_preview_frame = QPushButton("Preview frame")
         row_frame.addWidget(self.btn_preview_frame)
+
+        self.btn_play = QPushButton("Play")
+        self.btn_play.setObjectName("")
+        row_frame.addWidget(self.btn_play)
+
+        self.btn_stop = QPushButton("Stop")
+        self.btn_stop.setObjectName("")
+        self.btn_stop.setEnabled(False)
+        row_frame.addWidget(self.btn_stop)
+
+        self.check_loop = QCheckBox("Loop")
+        self.check_loop.setChecked(True)
+        row_frame.addWidget(self.check_loop)
         row_frame.addStretch()
         pipe_layout.addLayout(row_frame)
 
@@ -50,7 +63,7 @@ class PipelinePanel(QGroupBox):
         self.progress_bar.setVisible(False)
         row_task.addWidget(self.progress_bar)
 
-        self.btn_run_all = QPushButton("Run all 4 pipeline steps")
+        self.btn_run_all = QPushButton("Compute full pipeline")
         self.btn_run_all.setObjectName("")
         row_task.addWidget(self.btn_run_all)
 
@@ -61,7 +74,7 @@ class PipelinePanel(QGroupBox):
         pipe_layout.addLayout(row_task)
 
         # Pipeline flow hint
-        self.label_flow = QLabel("Pipeline flow: FFmpeg -> BMP -> Potrace -> ILDA")
+        self.label_flow = QLabel("Current pipeline flow: FFmpeg -> BMP -> Potrace -> ILDA")
         pipe_layout.addWidget(self.label_flow)
 
         # ---- Steps ----
@@ -84,7 +97,7 @@ class PipelinePanel(QGroupBox):
         step1_group.setObjectName("")
         step1_group.setMinimumHeight(step_min_height)
         s1_layout = QVBoxLayout(step1_group)
-        self.btn_ffmpeg = QPushButton("Run FFmpeg")
+        self.btn_ffmpeg = QPushButton("Compute FFmpeg")
         self.btn_ffmpeg.setObjectName("")
         s1_layout.addWidget(self.btn_ffmpeg)
         s1_layout.addStretch()
@@ -103,7 +116,7 @@ class PipelinePanel(QGroupBox):
         self.step2_group.setMinimumHeight(step_min_height)
         s2_layout = QVBoxLayout(self.step2_group)
 
-        self.btn_bmp = QPushButton("Run BMP conversion")
+        self.btn_bmp = QPushButton("Compute BMP conversion")
         self.btn_bmp.setObjectName("")
         s2_layout.addWidget(self.btn_bmp)
 
@@ -133,7 +146,7 @@ class PipelinePanel(QGroupBox):
         self.grp_arcade_opencv.setObjectName("")
         self.grp_arcade_opencv.setMinimumHeight(step_min_height)
         arcade_layout = QVBoxLayout(self.grp_arcade_opencv)
-        self.btn_arcade = QPushButton("Run Arcade")
+        self.btn_arcade = QPushButton("Compute Arcade")
         self.btn_arcade.setObjectName("")
         arcade_layout.addWidget(self.btn_arcade)
         arcade_layout.setContentsMargins(4, 4, 4, 4)
@@ -216,7 +229,7 @@ class PipelinePanel(QGroupBox):
         self.step3_group.setObjectName("")
         self.step3_group.setMinimumHeight(step_min_height)
         s3_layout = QVBoxLayout(self.step3_group)
-        self.btn_potrace = QPushButton("Run Potrace")
+        self.btn_potrace = QPushButton("Compute Potrace")
         self.btn_potrace.setObjectName("")
         s3_layout.addWidget(self.btn_potrace)
         s3_layout.addStretch()
@@ -230,12 +243,12 @@ class PipelinePanel(QGroupBox):
 
         # Column 4: ILDA
         col4 = QVBoxLayout()
-        step4_group = QGroupBox("4. ILDA (export)")
+        step4_group = QGroupBox("4. ILDA (compute)")
         step4_group.setObjectName("")
         step4_group.setMinimumHeight(step_min_height)
         s4_layout = QVBoxLayout(step4_group)
 
-        self.btn_ilda = QPushButton("Export ILDA")
+        self.btn_ilda = QPushButton("Compute ILDA")
         self.btn_ilda.setObjectName("")
         s4_layout.addWidget(self.btn_ilda)
 
@@ -458,6 +471,9 @@ class PipelinePanel(QGroupBox):
         self.btn_ilda.setEnabled(run_enabled)
         self.btn_arcade.setEnabled(run_enabled)
         self.btn_preview_frame.setEnabled(run_enabled)
+        self.btn_play.setEnabled(run_enabled)
+        self.btn_stop.setEnabled(run_enabled and self.btn_stop.isEnabled())
+        self.check_loop.setEnabled(run_enabled)
 
         self.spin_frame.setEnabled(run_enabled)
         self.step2_group.setEnabled(run_enabled)
@@ -475,7 +491,9 @@ class PipelinePanel(QGroupBox):
 
         self.grp_arcade_output.setVisible(is_arcade)
         self.grp_ilda_advanced.setVisible(not is_arcade)
-        self.btn_ilda.setText("Re-export from frames" if is_arcade else "Export ILDA")
+        self.btn_ilda.setText(
+            "Compute Arcade (from frames)" if is_arcade else "Compute ILDA"
+        )
 
         run_enabled = not self._ui_busy
         self.step2_group.setEnabled(run_enabled and not is_arcade)
@@ -485,9 +503,9 @@ class PipelinePanel(QGroupBox):
         self.btn_arcade.setEnabled(run_enabled and is_arcade)
         self.grp_preview_arcade.setEnabled(is_arcade)
         self.label_flow.setText(
-            "Pipeline flow: FFmpeg -> Arcade -> ILDA"
+            "Current pipeline flow: FFmpeg -> Arcade -> ILDA"
             if is_arcade
-            else "Pipeline flow: FFmpeg -> BMP -> Potrace -> ILDA"
+            else "Current pipeline flow: FFmpeg -> BMP -> Potrace -> ILDA"
         )
         if not is_arcade:
             self.clear_arcade_preview()

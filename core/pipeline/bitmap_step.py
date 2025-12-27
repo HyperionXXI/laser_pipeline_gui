@@ -321,7 +321,7 @@ def run_bitmap_step(
                 )
             return StepResult(success=False, message=msg, output_dir=None)
 
-        msg = f"Images BMP générées dans : {out_dir}"
+        msg = f"BMP images computed in: {out_dir}"
         return StepResult(success=True, message=msg, output_dir=out_dir)
 
     # ------------------------------------------------------------
@@ -357,7 +357,7 @@ def run_bitmap_step(
         if _cancelled(cancel_cb):
             return StepResult(
                 success=False,
-                message="Conversion bitmap annulée.",
+                message="Bitmap computation canceled.",
                 output_dir=bmp_dir,
             )
 
@@ -390,5 +390,5 @@ def run_bitmap_step(
         encoding="utf-8",
     )
 
-    msg = f"Images BMP arcade générées dans : {bmp_dir} (layers + preview union + manifests)"
+    msg = f"Arcade BMP images computed in: {bmp_dir} (layers + preview union + manifests)"
     return StepResult(success=True, message=msg, output_dir=bmp_dir)

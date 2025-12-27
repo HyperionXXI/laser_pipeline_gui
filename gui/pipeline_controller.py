@@ -129,9 +129,9 @@ class PipelineController(QObject):
         arcade_params: Optional[dict[str, object]] = None,
     ) -> None:
         params = dict(arcade_params or {})
-        params.setdefault("preview_every_n", 5)
-        params.setdefault("preview_warmup_every_n", 2)
-        params.setdefault("preview_warmup_frames", 10)
+        params.setdefault("preview_every_n", 1)
+        params.setdefault("preview_warmup_every_n", 0)
+        params.setdefault("preview_warmup_frames", 0)
         self._start_background(
             _Task(
                 step_name="arcade_lines",
@@ -171,9 +171,9 @@ class PipelineController(QObject):
                 "kpps": 60,
                 "invert_y": True,       # IMPORTANT: image coords -> ILDA coords
                 "sample_color": True,   # keep colors in arcade
-                "preview_every_n": 5,
-                "preview_warmup_every_n": 2,
-                "preview_warmup_frames": 10,
+                "preview_every_n": 1,
+                "preview_warmup_every_n": 0,
+                "preview_warmup_frames": 0,
             }
             if arcade_params:
                 resolved_arcade_params.update(arcade_params)
@@ -233,7 +233,7 @@ class PipelineController(QObject):
         self._cancel_evt = threading.Event()
         self._announced_substeps = set()
 
-        self._log(f"[Pipeline] Starting step '{task.step_name}'...")
+        self._log(f"[Pipeline] Computing step '{task.step_name}'...")
         self.step_started.emit(task.step_name)
 
         def _runner() -> None:

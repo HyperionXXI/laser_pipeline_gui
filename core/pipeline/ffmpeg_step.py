@@ -33,7 +33,7 @@ def run_ffmpeg_step(
     - max_frames: 0 = toutes (comportement historique)
     """
     if cancel_cb and cancel_cb():
-        return StepResult(False, "Annulé.")
+        return StepResult(False, "Canceled.")
 
     p = FfmpegParams(
         video_path=Path(video_path),
@@ -54,7 +54,7 @@ def run_ffmpeg_step(
 
     frames = sorted(frames_dir.glob("frame_*.png"))
     if not frames:
-        return StepResult(False, f"Aucune frame PNG générée dans: {frames_dir}")
+        return StepResult(False, f"No PNG frames computed in: {frames_dir}")
 
     if progress_cb:
         # On expose au moins une frame et un total (utile UI preview/progress).
@@ -67,4 +67,4 @@ def run_ffmpeg_step(
             )
         )
 
-    return StepResult(True, f"Frames extraites dans : {frames_dir}")
+    return StepResult(True, f"Frames computed in: {frames_dir}")

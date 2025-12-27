@@ -50,13 +50,13 @@ def run_ilda_step(
 
         return StepResult(
             success=True,
-            message=f"Export ILDA terminé : {out_path.name} (mode={mode})",
+            message=f"ILDA computed: {out_path.name} (mode={mode})",
             output_dir=out_path.parent,
         )
 
     except Exception as exc:
         return StepResult(
             success=False,
-            message=f"Erreur export ILDA : {exc}",
+            message=f"ILDA computation error: {exc}",
             output_dir=None,
         )

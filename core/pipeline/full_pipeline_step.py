@@ -113,7 +113,7 @@ def run_full_pipeline_step(
     )
 
     if _is_cancelled(cancel_cb):
-        return StepResult(False, "Annulé.")
+        return StepResult(False, "Canceled.")
 
     # ----------------------------
     # Step 1: FFmpeg (always)
@@ -153,7 +153,7 @@ def run_full_pipeline_step(
     # ----------------------------
     if mode == "arcade":
         if _is_cancelled(cancel_cb):
-            return StepResult(False, "Annulé.")
+            return StepResult(False, "Canceled.")
 
         extra = dict(p.arcade_params or {})
 
@@ -187,7 +187,7 @@ def run_full_pipeline_step(
     # Classic pipeline
     # ----------------------------
     if _is_cancelled(cancel_cb):
-        return StepResult(False, "Annulé.")
+        return StepResult(False, "Canceled.")
 
     bitmap_res = run_bitmap_step(
         p.project,
@@ -201,7 +201,7 @@ def run_full_pipeline_step(
         return StepResult(False, f"Echec Bitmap: {bitmap_res.message}")
 
     if _is_cancelled(cancel_cb):
-        return StepResult(False, "Annulé.")
+        return StepResult(False, "Canceled.")
 
     potrace_res = run_potrace_step(
         p.project,
@@ -213,7 +213,7 @@ def run_full_pipeline_step(
         return StepResult(False, f"Echec Potrace: {potrace_res.message}")
 
     if _is_cancelled(cancel_cb):
-        return StepResult(False, "Annulé.")
+        return StepResult(False, "Canceled.")
 
     ilda_res = run_ilda_step(
         p.project,

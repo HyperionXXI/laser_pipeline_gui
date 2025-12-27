@@ -444,7 +444,6 @@ def run_arcade_lines_step(
     bgr_cache: Dict[int, np.ndarray] = {}
 
     preview_dir = project_root / "preview"
-    last_preview_png: Optional[Path] = None
     preview_stride = int(preview_every_n) if preview_every_n is not None else 0
     warmup_stride = int(preview_warmup_every_n) if preview_warmup_every_n is not None else 0
     warmup_frames = int(preview_warmup_frames) if preview_warmup_frames is not None else 0
@@ -457,10 +456,15 @@ def run_arcade_lines_step(
     preview_enabled = (preview_stride > 0 or warmup_stride > 0)
     if preview_enabled:
         preview_dir.mkdir(parents=True, exist_ok=True)
+        for stale in preview_dir.glob("arcade_preview_*.png"):
+            try:
+                stale.unlink()
+            except Exception:
+                pass
 
     for idx, p in enumerate(pngs):
         if cancel_cb and cancel_cb():
-            return StepResult(False, "Annulé.", project_root)
+            return StepResult(False, "Canceled.", project_root)
 
         img_bgr = cv2.imread(str(p), cv2.IMREAD_COLOR)
         if img_bgr is None:
@@ -505,7 +509,7 @@ def run_arcade_lines_step(
                     do_preview = True
 
             if do_preview:
-                preview_path = preview_dir / f"arcade_preview_live_{idx + 1:04d}.png"
+                preview_path = preview_dir / f"arcade_preview_{idx + 1:04d}.png"
                 if _render_poly_preview(
                     polylines,
                     img_bgr,
@@ -513,13 +517,7 @@ def run_arcade_lines_step(
                     preview_image_size=preview_image_size,
                     sample_color=sample_color,
                 ):
-                    if last_preview_png is not None and last_preview_png != preview_path:
-                        try:
-                            if last_preview_png.exists():
-                                last_preview_png.unlink()
-                        except Exception:
-                            pass
-                    last_preview_png = preview_path
+                    pass
                 else:
                     preview_path = None
 
@@ -540,7 +538,7 @@ def run_arcade_lines_step(
 
     for idx, polylines in enumerate(all_frames_polys):
         if cancel_cb and cancel_cb():
-            return StepResult(False, "Annulé.", project_root)
+            return StepResult(False, "Canceled.", project_root)
 
         pts_out: List[IldaPoint] = []
         img_bgr = bgr_cache.get(idx) if sample_color else None
@@ -579,4 +577,4 @@ def run_arcade_lines_step(
 
     write_ilda_file(out_path, frames_out, mode="truecolor")
 
-    return StepResult(True, f"Arcade v2 OK -> {out_path}", project_root)
+    return StepResult(True, f"Arcade v2 computed -> {out_path}", project_root)
