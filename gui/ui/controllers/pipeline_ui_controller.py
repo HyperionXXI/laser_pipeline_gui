@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import re
+from pathlib import Path
 from typing import Callable
 
 from core.pipeline.base import FrameProgress
@@ -29,6 +31,7 @@ class PipelineUiController:
         preview_controller: PreviewController,
         pipeline_service: PipelineService,
         pipeline_controller: PipelineController,
+        projects_root: Path,
         log_fn: Callable[[str], None],
     ) -> None:
         self._general_panel = general_panel
@@ -36,7 +39,10 @@ class PipelineUiController:
         self._preview_controller = preview_controller
         self._pipeline_service = pipeline_service
         self._pipeline_controller = pipeline_controller
+        self._projects_root = projects_root
         self._log = log_fn
+        self._last_suggested_mode: str | None = None
+        self._last_suggested_project: str | None = None
 
     def set_busy(self, busy: bool) -> None:
         run_enabled = not busy
@@ -52,6 +58,14 @@ class PipelineUiController:
         self._general_panel.edit_project.setEnabled(run_enabled)
         self._general_panel.spin_fps.setEnabled(run_enabled)
         self._general_panel.spin_max_frames.setEnabled(run_enabled)
+        self._general_panel.combo_ilda_mode.setEnabled(run_enabled)
+        self._general_panel.btn_apply_mode_suggestion.setEnabled(
+            run_enabled
+            and (
+                self._general_panel.get_suggested_mode_key() is not None
+                or self._general_panel.get_suggested_project_name() is not None
+            )
+        )
 
         self._pipeline_panel.set_busy(busy)
 
@@ -127,6 +141,37 @@ class PipelineUiController:
         self._log(f"Project: {settings.general.project or '<none>'}")
         self._log(f"FPS    : {settings.general.fps}")
         self._log("================================")
+        self._suggest_mode(settings.general.video_path)
+        self._suggest_project(settings.general.video_path)
+
+    def on_video_path_changed(self) -> None:
+        path = (self._general_panel.edit_video_path.text() or "").strip()
+        self._suggest_mode(path)
+        self._suggest_project(path)
+
+    def on_apply_mode_suggestion(self) -> None:
+        suggested = self._general_panel.get_suggested_mode_key()
+        if suggested:
+            label = self._general_panel.combo_ilda_mode.itemText(
+                self._general_panel.combo_ilda_mode.findData(suggested)
+            )
+            self._log(f"[UI] Applied suggested mode: {label}")
+        project_name = self._general_panel.get_suggested_project_name()
+        if project_name:
+            current = (self._general_panel.edit_project.text() or "").strip()
+            if current and current != project_name:
+                self._log(
+                    f"[UI] Applied suggested project: {project_name} (replaced {current})"
+                )
+            else:
+                self._log(f"[UI] Applied suggested project: {project_name}")
+        self._general_panel.apply_suggested_mode()
+
+    def on_mode_changed(self) -> None:
+        mode_key = str(self._general_panel.combo_ilda_mode.currentData() or "classic")
+        mode_label = self._general_panel.combo_ilda_mode.currentText()
+        self._pipeline_panel.set_mode_key(mode_key)
+        self._log(f"[UI] Mode set to: {mode_label}")
 
     def on_ffmpeg_click(self) -> None:
         settings = self._collect_settings()
@@ -165,7 +210,7 @@ class PipelineUiController:
         if str(mode_key).lower() != "arcade":
             self._log("Arcade error: current profile is not arcade.")
             return
-        mode_label = self._pipeline_panel.combo_ilda_mode.currentText()
+        mode_label = self._general_panel.combo_ilda_mode.currentText()
         self._log(f"[Arcade] Computing ILDA from PNG frames (profile={mode_label})...")
         self._pipeline_service.start_arcade_reexport(settings.general, settings.ilda)
 
@@ -184,7 +229,7 @@ class PipelineUiController:
             return
 
         mode_key = settings.ilda.mode
-        mode_label = self._pipeline_panel.combo_ilda_mode.currentText()
+        mode_label = self._general_panel.combo_ilda_mode.currentText()
         if str(mode_key).lower() == "arcade":
             self._log(
                 f"[Arcade] Computing ILDA from PNG frames (profile={mode_label})..."
@@ -220,7 +265,7 @@ class PipelineUiController:
         thinning = settings.bitmap.thinning
         max_frames = settings.general.max_frames
         mode_key = settings.ilda.mode
-        mode_label = self._pipeline_panel.combo_ilda_mode.currentText()
+        mode_label = self._general_panel.combo_ilda_mode.currentText()
 
         self._log("Computing full pipeline...")
         self._log(f"  Video   : {settings.general.video_path}")
@@ -240,13 +285,19 @@ class PipelineUiController:
     def on_stop_click(self) -> None:
         self._preview_controller.stop_play()
 
+    def on_play_speed_changed(self) -> None:
+        self._preview_controller.update_play_speed()
+
+    def on_play_range_changed(self) -> None:
+        self._preview_controller.update_play_range()
+
     def on_preview_frame(self) -> None:
         self._preview_controller.show_current_frame()
 
     def _collect_settings(self) -> PipelineSettings:
         max_frames_val = self._general_panel.spin_max_frames.value()
         max_frames = max_frames_val if max_frames_val > 0 else None
-        mode_key = str(self._pipeline_panel.combo_ilda_mode.currentData() or "classic")
+        mode_key = str(self._general_panel.combo_ilda_mode.currentData() or "classic")
 
         general = GeneralSettings(
             video_path=(self._general_panel.edit_video_path.text() or "").strip(),
@@ -298,3 +349,64 @@ class PipelineUiController:
             ilda=ilda,
             preview=preview,
         )
+
+    def _suggest_mode(self, video_path: str) -> None:
+        if not video_path:
+            self._general_panel.clear_mode_suggestion()
+            if self._last_suggested_mode is not None:
+                self._log("[UI] Suggested mode cleared (no video selected).")
+            self._last_suggested_mode = None
+            return
+        name = str(video_path).lower()
+        if "arcade" in name:
+            suggested = "arcade"
+            reason = "filename"
+        else:
+            suggested = "classic"
+            reason = "filename"
+        self._general_panel.set_mode_suggestion(suggested, reason)
+        current_mode = str(self._general_panel.combo_ilda_mode.currentData() or "")
+        if suggested != self._last_suggested_mode:
+            label = self._general_panel.combo_ilda_mode.itemText(
+                self._general_panel.combo_ilda_mode.findData(suggested)
+            )
+            if suggested != current_mode:
+                self._log(f"[UI] Suggested mode: {label} ({reason})")
+            self._last_suggested_mode = suggested
+
+    def _suggest_project(self, video_path: str) -> None:
+        if not video_path:
+            self._general_panel.clear_project_suggestion()
+            if self._last_suggested_project is not None:
+                self._log("[UI] Suggested project cleared (no video selected).")
+            self._last_suggested_project = None
+            return
+        current_text = (self._general_panel.edit_project.text() or "").strip()
+        stem = Path(video_path).stem
+        cleaned = re.sub(r"[^A-Za-z0-9]+", "_", stem).strip("_").lower()
+        if not cleaned:
+            self._general_panel.clear_project_suggestion()
+            return
+        if len(cleaned) > 50:
+            cleaned = cleaned[:50]
+        if current_text and current_text != "project_demo" and current_text != cleaned:
+            self._general_panel.clear_project_suggestion()
+            self._last_suggested_project = None
+            return
+        suggested = self._dedupe_project_name(cleaned)
+        self._general_panel.set_project_suggestion(suggested)
+        current = (self._general_panel.edit_project.text() or "").strip().lower()
+        if suggested != self._last_suggested_project and suggested != current:
+            reason = "filename"
+            if suggested != cleaned:
+                reason = "filename+dedup"
+            self._log(f"[UI] Suggested project: {suggested} ({reason})")
+            self._last_suggested_project = suggested
+
+    def _dedupe_project_name(self, base: str) -> str:
+        candidate = base
+        suffix = 2
+        while (self._projects_root / candidate).exists():
+            candidate = f"{base}_{suffix}"
+            suffix += 1
+        return candidate

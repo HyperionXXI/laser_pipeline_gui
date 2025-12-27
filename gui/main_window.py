@@ -68,6 +68,7 @@ class MainWindow(QMainWindow):
             preview_controller=self.preview_controller,
             pipeline_service=self.pipeline_service,
             pipeline_controller=self.pipeline,
+            projects_root=PROJECTS_ROOT,
             log_fn=self.log,
         )
         self.project_controller = ProjectController(
@@ -98,11 +99,29 @@ class MainWindow(QMainWindow):
             self.project_controller.choose_video
         )
         self.general_panel.btn_test.clicked.connect(self.pipeline_ui.on_test_click)
+        self.general_panel.edit_video_path.textChanged.connect(
+            self.pipeline_ui.on_video_path_changed
+        )
+        self.general_panel.btn_apply_mode_suggestion.clicked.connect(
+            self.pipeline_ui.on_apply_mode_suggestion
+        )
+        self.general_panel.combo_ilda_mode.currentIndexChanged.connect(
+            self.pipeline_ui.on_mode_changed
+        )
         self.pipeline_panel.btn_preview_frame.clicked.connect(
             self.pipeline_ui.on_preview_frame
         )
         self.pipeline_panel.btn_play.clicked.connect(self.pipeline_ui.on_play_click)
         self.pipeline_panel.btn_stop.clicked.connect(self.pipeline_ui.on_stop_click)
+        self.pipeline_panel.spin_play_speed.valueChanged.connect(
+            self.pipeline_ui.on_play_speed_changed
+        )
+        self.pipeline_panel.spin_play_start.valueChanged.connect(
+            self.pipeline_ui.on_play_range_changed
+        )
+        self.pipeline_panel.spin_play_end.valueChanged.connect(
+            self.pipeline_ui.on_play_range_changed
+        )
         self.pipeline_panel.btn_run_all.clicked.connect(
             self.pipeline_ui.on_execute_all_task
         )
@@ -121,7 +140,9 @@ class MainWindow(QMainWindow):
         self.pipeline.step_error.connect(self.pipeline_ui.on_step_error)
         self.pipeline.step_progress.connect(self.pipeline_ui.on_step_progress)
 
-        self.pipeline_panel.update_mode_ui()
+        self.pipeline_panel.set_mode_key(
+            str(self.general_panel.combo_ilda_mode.currentData() or "classic")
+        )
 
         self._apply_style()
 

@@ -55,6 +55,33 @@ class PipelinePanel(QGroupBox):
         row_frame.addStretch()
         pipe_layout.addLayout(row_frame)
 
+        # Play settings row
+        row_play = QHBoxLayout()
+        row_play.addWidget(QLabel("From:"))
+        self.spin_play_start = QSpinBox()
+        self.spin_play_start.setRange(1, 999999)
+        self.spin_play_start.setValue(1)
+        row_play.addWidget(self.spin_play_start)
+
+        row_play.addWidget(QLabel("To (0=auto):"))
+        self.spin_play_end = QSpinBox()
+        self.spin_play_end.setRange(0, 999999)
+        self.spin_play_end.setValue(0)
+        row_play.addWidget(self.spin_play_end)
+
+        row_play.addWidget(QLabel("Speed:"))
+        self.spin_play_speed = QDoubleSpinBox()
+        self.spin_play_speed.setRange(0.25, 4.0)
+        self.spin_play_speed.setSingleStep(0.25)
+        self.spin_play_speed.setDecimals(2)
+        self.spin_play_speed.setValue(1.0)
+        row_play.addWidget(self.spin_play_speed)
+
+        self.label_play_status = QLabel("")
+        row_play.addWidget(self.label_play_status, 1)
+        row_play.addStretch()
+        pipe_layout.addLayout(row_play)
+
         # Task status row
         row_task = QHBoxLayout()
         self.progress_bar = QProgressBar()
@@ -252,15 +279,6 @@ class PipelinePanel(QGroupBox):
         self.btn_ilda.setObjectName("")
         s4_layout.addWidget(self.btn_ilda)
 
-        row_mode = QHBoxLayout()
-        row_mode.addWidget(QLabel("Profile:"))
-        self.combo_ilda_mode = QComboBox()
-        self.combo_ilda_mode.addItem("Classic (B/W)", "classic")
-        self.combo_ilda_mode.addItem("Arcade (experimental)", "arcade")
-        self.combo_ilda_mode.setCurrentIndex(0)
-        row_mode.addWidget(self.combo_ilda_mode)
-        s4_layout.addLayout(row_mode)
-
         s4_layout.addStretch()
         col4.addWidget(step4_group)
 
@@ -446,7 +464,7 @@ class PipelinePanel(QGroupBox):
         pipe_layout.addWidget(self.steps_group)
         pipe_layout.addWidget(self.previews_group)
 
-        self.combo_ilda_mode.currentIndexChanged.connect(self.update_mode_ui)
+        self._mode_key = "classic"
         self.update_mode_ui()
 
     def set_busy(self, busy: bool) -> None:
@@ -474,6 +492,9 @@ class PipelinePanel(QGroupBox):
         self.btn_play.setEnabled(run_enabled)
         self.btn_stop.setEnabled(run_enabled and self.btn_stop.isEnabled())
         self.check_loop.setEnabled(run_enabled)
+        self.spin_play_start.setEnabled(run_enabled)
+        self.spin_play_end.setEnabled(run_enabled)
+        self.spin_play_speed.setEnabled(run_enabled)
 
         self.spin_frame.setEnabled(run_enabled)
         self.step2_group.setEnabled(run_enabled)
@@ -486,7 +507,7 @@ class PipelinePanel(QGroupBox):
         self.update_mode_ui()
 
     def update_mode_ui(self) -> None:
-        mode = self.combo_ilda_mode.currentData() or "classic"
+        mode = self._mode_key or "classic"
         is_arcade = str(mode).lower() == "arcade"
 
         self.grp_arcade_output.setVisible(is_arcade)
@@ -509,6 +530,10 @@ class PipelinePanel(QGroupBox):
         )
         if not is_arcade:
             self.clear_arcade_preview()
+
+    def set_mode_key(self, mode_key: str) -> None:
+        self._mode_key = mode_key
+        self.update_mode_ui()
 
     def show_arcade_preview(self, path: str) -> None:
         self.preview_arcade.show_image(path)

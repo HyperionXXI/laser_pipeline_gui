@@ -28,6 +28,7 @@ class PreviewController:
         self._play_timer = QTimer()
         self._play_timer.timeout.connect(self._on_play_tick)
         self._play_active = False
+        self._play_start_frame = 1
         self._play_frame = 1
         self._play_end_frame = 1
 
@@ -57,6 +58,17 @@ class PreviewController:
         else:
             self.start_play()
 
+    def update_play_speed(self) -> None:
+        if not self._play_active:
+            return
+        self._play_timer.start(self._get_play_interval_ms())
+
+    def update_play_range(self) -> None:
+        if not self._play_active:
+            return
+        self.stop_play()
+        self.start_play()
+
     def start_play(self) -> None:
         project = (self._general_panel.edit_project.text() or "").strip()
         if not project:
@@ -71,9 +83,18 @@ class PreviewController:
         if end_frame <= 0:
             self._log("Preview error: no frames available for playback.")
             return
+        start_frame = int(self._pipeline_panel.spin_play_start.value())
+        if start_frame < 1:
+            start_frame = 1
+        requested_end = int(self._pipeline_panel.spin_play_end.value())
+        if requested_end > 0:
+            end_frame = min(end_frame, requested_end)
+        if start_frame > end_frame:
+            start_frame = end_frame
+        self._play_start_frame = start_frame
         current = int(self._pipeline_panel.spin_frame.value())
-        if current < 1 or current > end_frame:
-            current = 1
+        if current < start_frame or current > end_frame:
+            current = start_frame
             self._pipeline_panel.spin_frame.setValue(current)
         self._play_frame = current
         self._play_end_frame = end_frame
@@ -82,7 +103,10 @@ class PreviewController:
         self._pipeline_panel.btn_stop.setEnabled(True)
         self._pipeline_panel.spin_frame.setEnabled(False)
         self._pipeline_panel.btn_preview_frame.setEnabled(False)
-        self._play_timer.start(int(1000 / fps))
+        self._pipeline_panel.label_play_status.setText(
+            f"Frame {self._play_frame} / {self._play_end_frame}"
+        )
+        self._play_timer.start(self._get_play_interval_ms())
 
     def stop_play(self) -> None:
         if not self._play_active:
@@ -93,6 +117,17 @@ class PreviewController:
         self._pipeline_panel.btn_stop.setEnabled(False)
         self._pipeline_panel.spin_frame.setEnabled(True)
         self._pipeline_panel.btn_preview_frame.setEnabled(True)
+        self._pipeline_panel.label_play_status.setText("")
+
+    def _get_play_interval_ms(self) -> int:
+        fps = int(self._general_panel.spin_fps.value())
+        if fps <= 0:
+            fps = 1
+        speed = float(self._pipeline_panel.spin_play_speed.value())
+        if speed <= 0:
+            speed = 1.0
+        effective_fps = max(1.0, fps * speed)
+        return max(1, int(1000 / effective_fps))
 
     def _resolve_play_end_frame(self, project_root: Path, max_frames: int) -> int:
         if max_frames > 0:
@@ -131,10 +166,13 @@ class PreviewController:
             return
         self.show_frame_preview(project, self._play_frame, log_preview=False)
         self._pipeline_panel.spin_frame.setValue(self._play_frame)
+        self._pipeline_panel.label_play_status.setText(
+            f"Frame {self._play_frame} / {self._play_end_frame}"
+        )
         self._play_frame += 1
         if self._play_frame > self._play_end_frame:
             if self._pipeline_panel.check_loop.isChecked():
-                self._play_frame = 1
+                self._play_frame = self._play_start_frame
             else:
                 self.stop_play()
 
@@ -188,7 +226,7 @@ class PreviewController:
                 pass
 
     def _is_arcade_mode(self) -> bool:
-        mode = self._pipeline_panel.combo_ilda_mode.currentData() or "classic"
+        mode = self._general_panel.combo_ilda_mode.currentData() or "classic"
         return str(mode).lower() == "arcade"
 
     def _show_frame_paths(self, paths: FramePreviewPaths) -> None:
