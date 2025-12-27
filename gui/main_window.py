@@ -108,6 +108,7 @@ class MainWindow(QMainWindow):
         self.pipeline_panel.btn_ffmpeg.clicked.connect(self.pipeline_ui.on_ffmpeg_click)
         self.pipeline_panel.btn_bmp.clicked.connect(self.pipeline_ui.on_bmp_click)
         self.pipeline_panel.btn_potrace.clicked.connect(self.pipeline_ui.on_potrace_click)
+        self.pipeline_panel.btn_arcade.clicked.connect(self.pipeline_ui.on_arcade_click)
         self.pipeline_panel.btn_ilda.clicked.connect(self.pipeline_ui.on_export_ilda_click)
         self.pipeline_panel.combo_ilda_palette.currentIndexChanged.connect(
             self.preview_controller.on_palette_changed
@@ -119,6 +120,8 @@ class MainWindow(QMainWindow):
         self.pipeline.step_progress.connect(self.pipeline_ui.on_step_progress)
 
         self.pipeline_panel.update_mode_ui()
+
+        self._apply_style()
 
     # ---------------- Logging ------------------------------------
 
@@ -150,6 +153,9 @@ class MainWindow(QMainWindow):
             self.showNormal()
         else:
             self.showFullScreen()
+
+    def _apply_style(self) -> None:
+        self.setStyleSheet("")
 
 
 

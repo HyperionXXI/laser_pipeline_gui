@@ -153,6 +153,19 @@ class PipelineUiController:
         )
         self._pipeline_service.start_bitmap(settings.general, threshold, thinning)
 
+    def on_arcade_click(self) -> None:
+        settings = self._collect_settings()
+        if not settings.general.project:
+            self._log("Arcade error: project name is empty.")
+            return
+        mode_key = settings.ilda.mode
+        if str(mode_key).lower() != "arcade":
+            self._log("Arcade error: current profile is not arcade.")
+            return
+        mode_label = self._pipeline_panel.combo_ilda_mode.currentText()
+        self._log(f"[Arcade] Export ILDA from PNG frames (profile={mode_label})...")
+        self._pipeline_service.start_arcade_reexport(settings.general, settings.ilda)
+
     def on_potrace_click(self) -> None:
         project = (self._general_panel.edit_project.text() or "").strip()
         if not project:

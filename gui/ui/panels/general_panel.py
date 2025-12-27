@@ -15,6 +15,7 @@ from PySide6.QtWidgets import (
 class GeneralPanel(QGroupBox):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__("General settings", parent)
+        self.setObjectName("sectionGroup")
 
         layout = QVBoxLayout(self)
 

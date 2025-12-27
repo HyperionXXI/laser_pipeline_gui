@@ -12,6 +12,7 @@ from PySide6.QtWidgets import (
     QPushButton,
     QProgressBar,
     QSpinBox,
+    QStackedLayout,
     QSizePolicy,
     QVBoxLayout,
     QWidget,
@@ -50,6 +51,7 @@ class PipelinePanel(QGroupBox):
         row_task.addWidget(self.progress_bar)
 
         self.btn_run_all = QPushButton("Run all 4 pipeline steps")
+        self.btn_run_all.setObjectName("")
         row_task.addWidget(self.btn_run_all)
 
         self.btn_cancel = QPushButton("Cancel current task")
@@ -58,22 +60,32 @@ class PipelinePanel(QGroupBox):
 
         pipe_layout.addLayout(row_task)
 
-        # ---- Grid (steps + previews) ----
-        self.grid_layout = QGridLayout()
-        grid_layout = self.grid_layout
-        grid_layout.setContentsMargins(0, 0, 0, 0)
-        grid_layout.setHorizontalSpacing(8)
-        grid_layout.setVerticalSpacing(8)
-        grid_layout.setRowStretch(0, 1)
-        grid_layout.setRowStretch(1, 1)
+        # Pipeline flow hint
+        self.label_flow = QLabel("Pipeline flow: FFmpeg -> BMP -> Potrace -> ILDA")
+        pipe_layout.addWidget(self.label_flow)
+
+        # ---- Steps ----
+        self.steps_group = QGroupBox("Processing steps")
+        self.steps_group.setObjectName("")
+        steps_layout = QGridLayout(self.steps_group)
+        steps_layout.setContentsMargins(6, 6, 6, 6)
+        steps_layout.setHorizontalSpacing(6)
+        steps_layout.setVerticalSpacing(6)
+        steps_layout.setRowStretch(0, 1)
         for col in range(5):
-            grid_layout.setColumnStretch(col, 1)
+            steps_layout.setColumnStretch(col, 1)
+
+        step_min_height = 140
+        preview_min_height = 220
 
         # Column 1: FFmpeg
         col1 = QVBoxLayout()
         step1_group = QGroupBox("1. FFmpeg -> PNG")
+        step1_group.setObjectName("")
+        step1_group.setMinimumHeight(step_min_height)
         s1_layout = QVBoxLayout(step1_group)
         self.btn_ffmpeg = QPushButton("Run FFmpeg")
+        self.btn_ffmpeg.setObjectName("")
         s1_layout.addWidget(self.btn_ffmpeg)
         s1_layout.addStretch()
         col1.addWidget(step1_group)
@@ -87,7 +99,13 @@ class PipelinePanel(QGroupBox):
         # Column 2: Bitmap
         col2 = QVBoxLayout()
         self.step2_group = QGroupBox("2. PNG -> BMP (threshold)")
+        self.step2_group.setObjectName("")
+        self.step2_group.setMinimumHeight(step_min_height)
         s2_layout = QVBoxLayout(self.step2_group)
+
+        self.btn_bmp = QPushButton("Run BMP conversion")
+        self.btn_bmp.setObjectName("")
+        s2_layout.addWidget(self.btn_bmp)
 
         row_thr = QHBoxLayout()
         row_thr.addWidget(QLabel("Threshold (%):"))
@@ -101,8 +119,6 @@ class PipelinePanel(QGroupBox):
         self.check_bmp_thinning.setChecked(False)
         s2_layout.addWidget(self.check_bmp_thinning)
 
-        self.btn_bmp = QPushButton("Run BMP conversion")
-        s2_layout.addWidget(self.btn_bmp)
         s2_layout.addStretch()
         col2.addWidget(self.step2_group)
 
@@ -114,9 +130,14 @@ class PipelinePanel(QGroupBox):
 
         # Column 2.5: Arcade OpenCV
         self.grp_arcade_opencv = QGroupBox("Arcade (OpenCV)")
+        self.grp_arcade_opencv.setObjectName("")
+        self.grp_arcade_opencv.setMinimumHeight(step_min_height)
         arcade_layout = QVBoxLayout(self.grp_arcade_opencv)
-        arcade_layout.setContentsMargins(6, 6, 6, 6)
-        arcade_layout.setSpacing(4)
+        self.btn_arcade = QPushButton("Run Arcade")
+        self.btn_arcade.setObjectName("")
+        arcade_layout.addWidget(self.btn_arcade)
+        arcade_layout.setContentsMargins(4, 4, 4, 4)
+        arcade_layout.setSpacing(3)
 
         self.check_arcade_sample_color = QCheckBox("Sample color from image")
         self.check_arcade_sample_color.setChecked(True)
@@ -154,7 +175,7 @@ class PipelinePanel(QGroupBox):
         self.arcade_advanced_widget = QWidget()
         adv_layout = QVBoxLayout(self.arcade_advanced_widget)
         adv_layout.setContentsMargins(0, 0, 0, 0)
-        adv_layout.setSpacing(4)
+        adv_layout.setSpacing(3)
 
         row_simplify = QHBoxLayout()
         row_simplify.addWidget(QLabel("Simplify epsilon :"))
@@ -192,8 +213,11 @@ class PipelinePanel(QGroupBox):
         # Column 3: Potrace
         col3 = QVBoxLayout()
         self.step3_group = QGroupBox("3. Vectorization (Potrace)")
+        self.step3_group.setObjectName("")
+        self.step3_group.setMinimumHeight(step_min_height)
         s3_layout = QVBoxLayout(self.step3_group)
         self.btn_potrace = QPushButton("Run Potrace")
+        self.btn_potrace.setObjectName("")
         s3_layout.addWidget(self.btn_potrace)
         s3_layout.addStretch()
         col3.addWidget(self.step3_group)
@@ -207,7 +231,13 @@ class PipelinePanel(QGroupBox):
         # Column 4: ILDA
         col4 = QVBoxLayout()
         step4_group = QGroupBox("4. ILDA (export)")
+        step4_group.setObjectName("")
+        step4_group.setMinimumHeight(step_min_height)
         s4_layout = QVBoxLayout(step4_group)
+
+        self.btn_ilda = QPushButton("Export ILDA")
+        self.btn_ilda.setObjectName("")
+        s4_layout.addWidget(self.btn_ilda)
 
         row_mode = QHBoxLayout()
         row_mode.addWidget(QLabel("Profile:"))
@@ -218,13 +248,13 @@ class PipelinePanel(QGroupBox):
         row_mode.addWidget(self.combo_ilda_mode)
         s4_layout.addLayout(row_mode)
 
-        self.btn_ilda = QPushButton("Export ILDA")
-        s4_layout.addWidget(self.btn_ilda)
         s4_layout.addStretch()
         col4.addWidget(step4_group)
 
         # Arcade output parameters
         self.grp_arcade_output = QGroupBox("Arcade output")
+        self.grp_arcade_output.setObjectName("")
+        self.grp_arcade_output.setMinimumHeight(step_min_height)
         arcade_out_layout = QVBoxLayout(self.grp_arcade_output)
 
         row_kpps = QHBoxLayout()
@@ -270,6 +300,8 @@ class PipelinePanel(QGroupBox):
 
         # Classic ILDA parameters
         self.grp_ilda_advanced = QGroupBox("ILDA Parameters (classic)")
+        self.grp_ilda_advanced.setObjectName("")
+        self.grp_ilda_advanced.setMinimumHeight(step_min_height)
         ilda_adv_layout = QVBoxLayout(self.grp_ilda_advanced)
 
         row_fit = QHBoxLayout()
@@ -314,6 +346,8 @@ class PipelinePanel(QGroupBox):
 
         # Previews row
         self.grp_preview_png = QGroupBox("PNG preview")
+        self.grp_preview_png.setObjectName("")
+        self.grp_preview_png.setMinimumHeight(preview_min_height)
         self.grp_preview_png.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         p1_layout = QVBoxLayout(self.grp_preview_png)
         self.preview_png = RasterPreview()
@@ -321,6 +355,8 @@ class PipelinePanel(QGroupBox):
         p1_layout.addWidget(self.preview_png)
 
         self.grp_preview_bmp = QGroupBox("BMP preview")
+        self.grp_preview_bmp.setObjectName("")
+        self.grp_preview_bmp.setMinimumHeight(preview_min_height)
         self.grp_preview_bmp.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         p2_layout = QVBoxLayout(self.grp_preview_bmp)
         self.preview_bmp = RasterPreview()
@@ -328,13 +364,25 @@ class PipelinePanel(QGroupBox):
         p2_layout.addWidget(self.preview_bmp)
 
         self.grp_preview_arcade = QGroupBox("Arcade preview")
+        self.grp_preview_arcade.setObjectName("")
+        self.grp_preview_arcade.setMinimumHeight(preview_min_height)
         self.grp_preview_arcade.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         arcade_prev_layout = QVBoxLayout(self.grp_preview_arcade)
-        arcade_prev_label = QLabel("No preview available")
-        arcade_prev_label.setAlignment(Qt.AlignCenter)
-        arcade_prev_layout.addWidget(arcade_prev_label)
+        self.arcade_preview_stack = QStackedLayout()
+        self.arcade_preview_label = QLabel("No preview available")
+        self.arcade_preview_label.setAlignment(Qt.AlignCenter)
+        self.preview_arcade = RasterPreview()
+        self.preview_arcade.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.arcade_preview_stack.addWidget(self.arcade_preview_label)
+        self.arcade_preview_stack.addWidget(self.preview_arcade)
+        self.arcade_preview_stack.setCurrentWidget(self.arcade_preview_label)
+        arcade_preview_container = QWidget()
+        arcade_preview_container.setLayout(self.arcade_preview_stack)
+        arcade_prev_layout.addWidget(arcade_preview_container)
 
         self.grp_preview_svg = QGroupBox("SVG preview")
+        self.grp_preview_svg.setObjectName("")
+        self.grp_preview_svg.setMinimumHeight(preview_min_height)
         self.grp_preview_svg.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         p3_layout = QVBoxLayout(self.grp_preview_svg)
         self.preview_svg = SvgPreview()
@@ -342,6 +390,8 @@ class PipelinePanel(QGroupBox):
         p3_layout.addWidget(self.preview_svg)
 
         self.grp_preview_ilda = QGroupBox("ILDA preview")
+        self.grp_preview_ilda.setObjectName("")
+        self.grp_preview_ilda.setMinimumHeight(preview_min_height)
         self.grp_preview_ilda.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         p4_layout = QVBoxLayout(self.grp_preview_ilda)
         palette_row = QHBoxLayout()
@@ -357,18 +407,31 @@ class PipelinePanel(QGroupBox):
         self.preview_ilda.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         p4_layout.addWidget(self.preview_ilda)
 
-        grid_layout.addWidget(self.col1_widget, 0, 0)
-        grid_layout.addWidget(self.col2_widget, 0, 1)
-        grid_layout.addWidget(self.arcade_widget, 0, 2)
-        grid_layout.addWidget(self.col3_widget, 0, 3)
-        grid_layout.addWidget(self.col4_widget, 0, 4)
-        grid_layout.addWidget(self.grp_preview_png, 1, 0)
-        grid_layout.addWidget(self.grp_preview_bmp, 1, 1)
-        grid_layout.addWidget(self.grp_preview_arcade, 1, 2)
-        grid_layout.addWidget(self.grp_preview_svg, 1, 3)
-        grid_layout.addWidget(self.grp_preview_ilda, 1, 4)
+        steps_layout.addWidget(self.col1_widget, 0, 0)
+        steps_layout.addWidget(self.col2_widget, 0, 1)
+        steps_layout.addWidget(self.arcade_widget, 0, 2)
+        steps_layout.addWidget(self.col3_widget, 0, 3)
+        steps_layout.addWidget(self.col4_widget, 0, 4)
 
-        pipe_layout.addLayout(grid_layout)
+        # ---- Previews ----
+        self.previews_group = QGroupBox("Previews")
+        self.previews_group.setObjectName("")
+        previews_layout = QGridLayout(self.previews_group)
+        previews_layout.setContentsMargins(8, 8, 8, 8)
+        previews_layout.setHorizontalSpacing(8)
+        previews_layout.setVerticalSpacing(8)
+        previews_layout.setRowStretch(0, 1)
+        for col in range(5):
+            previews_layout.setColumnStretch(col, 1)
+
+        previews_layout.addWidget(self.grp_preview_png, 0, 0)
+        previews_layout.addWidget(self.grp_preview_bmp, 0, 1)
+        previews_layout.addWidget(self.grp_preview_arcade, 0, 2)
+        previews_layout.addWidget(self.grp_preview_svg, 0, 3)
+        previews_layout.addWidget(self.grp_preview_ilda, 0, 4)
+
+        pipe_layout.addWidget(self.steps_group)
+        pipe_layout.addWidget(self.previews_group)
 
         self.combo_ilda_mode.currentIndexChanged.connect(self.update_mode_ui)
         self.update_mode_ui()
@@ -393,6 +456,7 @@ class PipelinePanel(QGroupBox):
         self.btn_bmp.setEnabled(run_enabled)
         self.btn_potrace.setEnabled(run_enabled)
         self.btn_ilda.setEnabled(run_enabled)
+        self.btn_arcade.setEnabled(run_enabled)
         self.btn_preview_frame.setEnabled(run_enabled)
 
         self.spin_frame.setEnabled(run_enabled)
@@ -418,7 +482,23 @@ class PipelinePanel(QGroupBox):
         self.step3_group.setEnabled(run_enabled and not is_arcade)
         self.grp_ilda_advanced.setEnabled(run_enabled and not is_arcade)
         self.grp_arcade_opencv.setEnabled(run_enabled and is_arcade)
+        self.btn_arcade.setEnabled(run_enabled and is_arcade)
         self.grp_preview_arcade.setEnabled(is_arcade)
+        self.label_flow.setText(
+            "Pipeline flow: FFmpeg -> Arcade -> ILDA"
+            if is_arcade
+            else "Pipeline flow: FFmpeg -> BMP -> Potrace -> ILDA"
+        )
+        if not is_arcade:
+            self.clear_arcade_preview()
+
+    def show_arcade_preview(self, path: str) -> None:
+        self.preview_arcade.show_image(path)
+        self.arcade_preview_stack.setCurrentWidget(self.preview_arcade)
+
+    def clear_arcade_preview(self) -> None:
+        self.preview_arcade.clear()
+        self.arcade_preview_stack.setCurrentWidget(self.arcade_preview_label)
 
     def set_ilda_title_live(self, live: bool) -> None:
         self.grp_preview_ilda.setTitle("ILDA preview (live)" if live else "ILDA preview")

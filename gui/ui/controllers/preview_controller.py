@@ -54,6 +54,7 @@ class PreviewController:
         project_root = self._projects_root / project
         paths = self._preview_service.frame_paths(project_root, ui_frame)
         self._show_frame_paths(paths)
+        self._clear_arcade_preview_if_needed()
         if paths.png is not None:
             self._log(f"[Preview] PNG: {paths.png}")
         if paths.bmp is not None:
@@ -74,15 +75,30 @@ class PreviewController:
                     f"[Preview] Failed to generate ILDA preview for frame {ui_frame}: {exc}"
                 )
         else:
+            self._pipeline_panel.preview_ilda.clear()
             self._log("[Preview] No ILDA file found for this frame.")
+
+    def _clear_arcade_preview_if_needed(self) -> None:
+        mode = self._pipeline_panel.combo_ilda_mode.currentData() or "classic"
+        if str(mode).lower() != "arcade":
+            try:
+                self._pipeline_panel.clear_arcade_preview()
+            except Exception:
+                pass
 
     def _show_frame_paths(self, paths: FramePreviewPaths) -> None:
         if paths.png is not None:
             self._pipeline_panel.preview_png.show_image(str(paths.png))
+        else:
+            self._pipeline_panel.preview_png.clear()
         if paths.bmp is not None:
             self._pipeline_panel.preview_bmp.show_image(str(paths.bmp))
+        else:
+            self._pipeline_panel.preview_bmp.clear()
         if paths.svg is not None:
             self._pipeline_panel.preview_svg.show_svg(str(paths.svg))
+        else:
+            self._pipeline_panel.preview_svg.clear()
 
     def _render_ilda_preview(self, ilda_path: Path, out_png: Path, ui_frame: int) -> None:
         self._preview_service.ensure_ilda_preview(
@@ -100,12 +116,15 @@ class PreviewController:
         if svg_files:
             self._pipeline_panel.preview_svg.show_svg(str(svg_files[0]))
             self._log(f"[Preview] SVG: {svg_files[0]}")
+        else:
+            self._pipeline_panel.preview_svg.clear()
 
         preview_dir = project_root / "preview"
         preview_dir.mkdir(parents=True, exist_ok=True)
 
         ilda_path = self._resolve_ilda_path(project_root, project)
         if ilda_path is None:
+            self._pipeline_panel.preview_ilda.clear()
             return
         out_png = preview_dir / "ilda_preview.png"
         try:
@@ -121,8 +140,10 @@ class PreviewController:
             self._pipeline_panel.preview_bmp.show_image(path)
         elif step_name == "potrace":
             self._pipeline_panel.preview_svg.show_svg(path)
-        elif step_name in ("ilda", "arcade_lines"):
+        elif step_name == "ilda":
             self._pipeline_panel.preview_ilda.show_image(path)
+        elif step_name == "arcade_lines":
+            self._pipeline_panel.show_arcade_preview(path)
 
     def _resolve_ilda_path(self, project_root: Path, project: str) -> Path | None:
         candidates = [
