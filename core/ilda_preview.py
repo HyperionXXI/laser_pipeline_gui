@@ -403,13 +403,29 @@ def _compute_bounds(points: Sequence[tuple], fmt: int) -> Tuple[int, int, int, i
     return (min(xs), max(xs), min(ys), max(ys))
 
 
-def _map_xy(x: int, y: int, bounds: Tuple[int, int, int, int], size: int, margin: int) -> Tuple[int, int]:
+def _compute_scale(
+    bounds: Tuple[int, int, int, int],
+    size: int,
+    margin: int,
+    fit_height: bool,
+) -> float:
     minx, maxx, miny, maxy = bounds
     spanx = max(1, maxx - minx)
     spany = max(1, maxy - miny)
+    if fit_height:
+        return (size - 2 * margin) / spany
+    return min((size - 2 * margin) / spanx, (size - 2 * margin) / spany)
 
-    scale = min((size - 2 * margin) / spanx, (size - 2 * margin) / spany)
 
+def _map_xy(
+    x: int,
+    y: int,
+    bounds: Tuple[int, int, int, int],
+    size: int,
+    margin: int,
+    scale: float,
+) -> Tuple[int, int]:
+    minx, maxx, miny, maxy = bounds
     cx = (minx + maxx) / 2.0
     cy = (miny + maxy) / 2.0
 
@@ -423,9 +439,11 @@ def render_frame_to_image(
     frame: IldaFrame,
     palette: List[RGB],
     image_size: int = 640,
-    margin: int = 30,
+    margin: int = 10,
     point_radius: int = 2,
     line_width: int = 2,
+    swap_rb: bool = False,
+    fit_height: bool = False,
 ) -> Image.Image:
     """
     Render a single ILDA frame into a PIL Image.
@@ -440,6 +458,7 @@ def render_frame_to_image(
     drawable_pts = list(_iter_drawable_points(pts, fmt))
     bounds_src = drawable_pts if drawable_pts else pts
     bounds = _compute_bounds(bounds_src, fmt)
+    scale = _compute_scale(bounds, image_size, margin, fit_height)
 
     prev_xy: Optional[Tuple[int, int]] = None
     prev_drawable = False
@@ -467,8 +486,10 @@ def render_frame_to_image(
             color = (int(r) & 0xFF, int(g) & 0xFF, int(b) & 0xFF)
         else:
             continue
+        if swap_rb and fmt in (4, 5):
+            color = (color[2], color[1], color[0])
 
-        xy = _map_xy(int(x), int(y), bounds, image_size, margin)
+        xy = _map_xy(int(x), int(y), bounds, image_size, margin, scale)
         drawable = not blanked
 
         # Draw segment only if both endpoints are drawable.
@@ -508,6 +529,8 @@ def render_ilda_preview(
     frame_index: int = 1,
     palette_name: Optional[str] = None,
     image_size: int = 640,
+    swap_rb: bool = False,
+    fit_height: bool = False,
 ) -> Path:
     """
     Generate a PNG preview for one frame of an ILDA file.
@@ -560,7 +583,13 @@ def render_ilda_preview(
         # true-color: palette irrelevant
         pal = palette_idtf14()
 
-    img = render_frame_to_image(frame, pal, image_size=image_size)
+    img = render_frame_to_image(
+        frame,
+        pal,
+        image_size=image_size,
+        swap_rb=swap_rb,
+        fit_height=fit_height,
+    )
 
     out_png.parent.mkdir(parents=True, exist_ok=True)
     img.save(out_png)

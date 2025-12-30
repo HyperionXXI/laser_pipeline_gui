@@ -25,6 +25,7 @@ class ArcadeOpenCVSettings:
     canny1: int
     canny2: int
     blur_ksize: int
+    skeleton_mode: bool
     simplify_eps: float
     min_poly_len: int
 
@@ -51,6 +52,7 @@ class IldaSettings:
     classic: IldaClassicSettings
     arcade_opencv: ArcadeOpenCVSettings
     arcade_output: ArcadeOutputSettings
+    swap_rb: bool
 
 
 @dataclass(frozen=True)

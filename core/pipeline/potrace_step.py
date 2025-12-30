@@ -144,7 +144,11 @@ def run_potrace_step(
                     )
                 )
 
-        return StepResult(True, f"SVG computed in: {svg_dir}", svg_dir)
+        return StepResult(
+            True,
+            f"SVG computed in: {svg_dir} ({total} frames)",
+            svg_dir,
+        )
 
     # ------------------------------------------------------------
     # ARCADE : vectorisation par couche + fusion XML correcte + data-rgb
@@ -204,4 +208,8 @@ def run_potrace_step(
                 )
             )
 
-    return StepResult(True, f"Arcade SVG computed in: {svg_dir}", svg_dir)
+    return StepResult(
+        True,
+        f"Arcade SVG computed in: {svg_dir} ({len(frames)} frames)",
+        svg_dir,
+    )

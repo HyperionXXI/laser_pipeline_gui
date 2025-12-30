@@ -385,10 +385,12 @@ def run_arcade_lines_step(
     canny1: int = 50,
     canny2: int = 140,
     blur_ksize: int = 3,
+    skeleton_mode: bool = False,
     min_poly_len: int = 30,
     simplify_eps: float = 1.2,
     sample_color: bool = False,
     invert_y: bool = False,
+    swap_rb: bool = False,
     preview_every_n: int = 0,
     preview_warmup_every_n: int = 0,
     preview_warmup_frames: int = 0,
@@ -429,7 +431,9 @@ def run_arcade_lines_step(
                 message=(
                     "Extraction traits (OpenCV)… "
                     f"(fps={fps}, kpps={kpps}, budget={max_points_per_frame} pts/frame, "
-                    f"canny=({canny1},{canny2}), blur={blur_ksize}, min_poly_len={min_poly_len}, eps={simplify_eps})"
+                    f"mode={'skeleton' if skeleton_mode else 'edge'}, "
+                    f"canny=({canny1},{canny2}), blur={blur_ksize}, "
+                    f"min_poly_len={min_poly_len}, eps={simplify_eps})"
                 ),
                 frame_index=0,
                 total_frames=len(pngs),
@@ -479,8 +483,16 @@ def run_arcade_lines_step(
             k = blur_ksize if blur_ksize % 2 == 1 else blur_ksize + 1
             gray = cv2.GaussianBlur(gray, (k, k), 0)
 
-        edges = cv2.Canny(gray, threshold1=canny1, threshold2=canny2)
-        binary01 = (edges > 0).astype(np.uint8)
+        if skeleton_mode:
+            _, bw = cv2.threshold(
+                gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU
+            )
+            if np.mean(bw) > 127:
+                bw = cv2.bitwise_not(bw)
+            binary01 = (bw > 0).astype(np.uint8)
+        else:
+            edges = cv2.Canny(gray, threshold1=canny1, threshold2=canny2)
+            binary01 = (edges > 0).astype(np.uint8)
 
         skel01 = _thin(binary01)
 
@@ -548,6 +560,8 @@ def run_arcade_lines_step(
                 break
 
             rgb = _sample_rgb_along_poly(img_bgr, poly) if sample_color else (255, 255, 255)
+            if swap_rb:
+                rgb = (rgb[2], rgb[1], rgb[0])
 
             x0, y0 = poly[0]
             xn0, yn0 = _norm_xy(x0, y0, center, scale, fill_ratio, invert_y=invert_y)
@@ -577,4 +591,8 @@ def run_arcade_lines_step(
 
     write_ilda_file(out_path, frames_out, mode="truecolor")
 
-    return StepResult(True, f"Arcade v2 computed -> {out_path}", project_root)
+    return StepResult(
+        True,
+        f"Arcade v2 computed -> {out_path} ({len(all_frames_polys)} frames)",
+        project_root,
+    )

@@ -286,6 +286,12 @@ def run_bitmap_step(
     # Classic path : inchangé
     # ------------------------------------------------------------
     if mode.lower() != "arcade":
+        frames_dir = PROJECTS_ROOT / project / "frames"
+        png_files = sorted(frames_dir.glob("frame_*.png"))
+        if max_frames is not None:
+            png_files = png_files[:max_frames]
+        total = len(png_files)
+
         def on_frame_done(idx: int, total: int, bmp_path):
             if progress_cb is not None:
                 progress_cb(
@@ -321,7 +327,10 @@ def run_bitmap_step(
                 )
             return StepResult(success=False, message=msg, output_dir=None)
 
-        msg = f"BMP images computed in: {out_dir}"
+        if total:
+            msg = f"BMP images computed in: {out_dir} ({total} frames)"
+        else:
+            msg = f"BMP images computed in: {out_dir}"
         return StepResult(success=True, message=msg, output_dir=out_dir)
 
     # ------------------------------------------------------------
@@ -390,5 +399,8 @@ def run_bitmap_step(
         encoding="utf-8",
     )
 
-    msg = f"Arcade BMP images computed in: {bmp_dir} (layers + preview union + manifests)"
+    msg = (
+        "Arcade BMP images computed in: "
+        f"{bmp_dir} ({total} frames, layers + preview union + manifests)"
+    )
     return StepResult(success=True, message=msg, output_dir=bmp_dir)

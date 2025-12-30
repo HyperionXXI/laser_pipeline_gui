@@ -19,8 +19,12 @@ class SuggestedParams:
     canny1: int
     canny2: int
     blur_ksize: int
+    skeleton_mode: bool
     simplify_eps: float
     min_poly_len: int
+    kpps: int
+    ppf_ratio: float
+    max_points_per_frame: int
 
 
 @dataclass(frozen=True)

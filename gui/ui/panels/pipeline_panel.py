@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QSize
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -11,9 +11,10 @@ from PySide6.QtWidgets import (
     QLabel,
     QPushButton,
     QProgressBar,
-    QSpinBox,
     QStackedLayout,
+    QSpinBox,
     QSizePolicy,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -108,40 +109,49 @@ class PipelinePanel(QGroupBox):
         self.steps_group = QGroupBox("Processing steps")
         self.steps_group.setObjectName("")
         steps_layout = QGridLayout(self.steps_group)
+        self.steps_layout = steps_layout
         steps_layout.setContentsMargins(6, 6, 6, 6)
         steps_layout.setHorizontalSpacing(6)
         steps_layout.setVerticalSpacing(6)
-        steps_layout.setRowStretch(0, 1)
+        steps_layout.setRowStretch(0, 0)
         for col in range(5):
             steps_layout.setColumnStretch(col, 1)
 
-        step_min_height = 140
-        preview_min_height = 220
+        preview_ratio = 4 / 3
+        preview_width = 300
+        preview_height = int(round(preview_width / preview_ratio))
+        preview_size = QSize(preview_width, preview_height)
+        preview_min_height = preview_height
 
         # Column 1: FFmpeg
         col1 = QVBoxLayout()
-        step1_group = QGroupBox("1. FFmpeg -> PNG")
-        step1_group.setObjectName("")
-        step1_group.setMinimumHeight(step_min_height)
-        s1_layout = QVBoxLayout(step1_group)
+        col1.setAlignment(Qt.AlignTop)
+        self.step1_group = QGroupBox("1. FFmpeg -> PNG")
+        self.step1_group.setObjectName("")
+        self.step1_group.setMinimumHeight(0)
+        s1_layout = QVBoxLayout(self.step1_group)
+        s1_layout.setAlignment(Qt.AlignTop)
+        s1_layout.setSpacing(4)
         self.btn_ffmpeg = QPushButton("Compute FFmpeg")
         self.btn_ffmpeg.setObjectName("")
         s1_layout.addWidget(self.btn_ffmpeg)
-        s1_layout.addStretch()
-        col1.addWidget(step1_group)
+        col1.addWidget(self.step1_group)
 
         col1_widget = QWidget()
         col1_widget.setLayout(col1)
-        col1_widget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-        step1_group.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        col1_widget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Minimum)
+        self.step1_group.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Minimum)
         self.col1_widget = col1_widget
 
         # Column 2: Bitmap
         col2 = QVBoxLayout()
+        col2.setAlignment(Qt.AlignTop)
         self.step2_group = QGroupBox("2. PNG -> BMP (threshold)")
         self.step2_group.setObjectName("")
-        self.step2_group.setMinimumHeight(step_min_height)
+        self.step2_group.setMinimumHeight(0)
         s2_layout = QVBoxLayout(self.step2_group)
+        s2_layout.setAlignment(Qt.AlignTop)
+        s2_layout.setSpacing(4)
 
         self.btn_bmp = QPushButton("Compute BMP conversion")
         self.btn_bmp.setObjectName("")
@@ -159,20 +169,20 @@ class PipelinePanel(QGroupBox):
         self.check_bmp_thinning.setChecked(False)
         s2_layout.addWidget(self.check_bmp_thinning)
 
-        s2_layout.addStretch()
         col2.addWidget(self.step2_group)
 
         col2_widget = QWidget()
         col2_widget.setLayout(col2)
-        col2_widget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-        self.step2_group.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        col2_widget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Minimum)
+        self.step2_group.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Minimum)
         self.col2_widget = col2_widget
 
         # Column 2.5: Arcade OpenCV
         self.grp_arcade_opencv = QGroupBox("Arcade (OpenCV)")
         self.grp_arcade_opencv.setObjectName("")
-        self.grp_arcade_opencv.setMinimumHeight(step_min_height)
+        self.grp_arcade_opencv.setMinimumHeight(0)
         arcade_layout = QVBoxLayout(self.grp_arcade_opencv)
+        arcade_layout.setAlignment(Qt.AlignTop)
         self.btn_arcade = QPushButton("Compute Arcade")
         self.btn_arcade.setObjectName("")
         arcade_layout.addWidget(self.btn_arcade)
@@ -209,84 +219,66 @@ class PipelinePanel(QGroupBox):
         row_blur.addWidget(self.spin_arcade_blur_ksize)
         arcade_layout.addLayout(row_blur)
 
+        self.check_arcade_skeleton = QCheckBox("Skeleton mode")
+        self.check_arcade_skeleton.setChecked(False)
+        arcade_layout.addWidget(self.check_arcade_skeleton)
+
         self.check_arcade_advanced = QCheckBox("Advanced")
         arcade_layout.addWidget(self.check_arcade_advanced)
 
-        self.arcade_advanced_widget = QWidget()
-        adv_layout = QVBoxLayout(self.arcade_advanced_widget)
-        adv_layout.setContentsMargins(0, 0, 0, 0)
-        adv_layout.setSpacing(3)
-
-        row_simplify = QHBoxLayout()
-        row_simplify.addWidget(QLabel("Simplify epsilon :"))
-        self.spin_arcade_simplify_eps = QDoubleSpinBox()
-        self.spin_arcade_simplify_eps.setRange(0.0, 50.0)
-        self.spin_arcade_simplify_eps.setSingleStep(0.25)
-        self.spin_arcade_simplify_eps.setDecimals(3)
-        self.spin_arcade_simplify_eps.setValue(2.0)
-        row_simplify.addWidget(self.spin_arcade_simplify_eps)
-        adv_layout.addLayout(row_simplify)
-
-        row_min_poly = QHBoxLayout()
-        row_min_poly.addWidget(QLabel("Min polygon length :"))
-        self.spin_arcade_min_poly_len = QSpinBox()
-        self.spin_arcade_min_poly_len.setRange(1, 1000)
-        self.spin_arcade_min_poly_len.setValue(10)
-        row_min_poly.addWidget(self.spin_arcade_min_poly_len)
-        adv_layout.addLayout(row_min_poly)
-
-        self.arcade_advanced_widget.setVisible(False)
-        self.check_arcade_advanced.toggled.connect(self.arcade_advanced_widget.setVisible)
-        arcade_layout.addWidget(self.arcade_advanced_widget)
-        arcade_layout.addStretch(1)
-
         arcade_col = QVBoxLayout()
+        arcade_col.setAlignment(Qt.AlignTop)
         arcade_col.addWidget(self.grp_arcade_opencv)
-        arcade_col.addStretch()
 
         arcade_widget = QWidget()
         arcade_widget.setLayout(arcade_col)
-        arcade_widget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-        self.grp_arcade_opencv.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        arcade_widget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Minimum)
+        self.grp_arcade_opencv.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Minimum)
         self.arcade_widget = arcade_widget
 
         # Column 3: Potrace
         col3 = QVBoxLayout()
+        col3.setAlignment(Qt.AlignTop)
         self.step3_group = QGroupBox("3. Vectorization (Potrace)")
         self.step3_group.setObjectName("")
-        self.step3_group.setMinimumHeight(step_min_height)
+        self.step3_group.setMinimumHeight(0)
         s3_layout = QVBoxLayout(self.step3_group)
+        s3_layout.setAlignment(Qt.AlignTop)
+        s3_layout.setSpacing(4)
         self.btn_potrace = QPushButton("Compute Potrace")
         self.btn_potrace.setObjectName("")
         s3_layout.addWidget(self.btn_potrace)
-        s3_layout.addStretch()
         col3.addWidget(self.step3_group)
 
         col3_widget = QWidget()
         col3_widget.setLayout(col3)
-        col3_widget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-        self.step3_group.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        col3_widget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Minimum)
+        self.step3_group.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Minimum)
         self.col3_widget = col3_widget
 
         # Column 4: ILDA
         col4 = QVBoxLayout()
-        step4_group = QGroupBox("4. ILDA (compute)")
-        step4_group.setObjectName("")
-        step4_group.setMinimumHeight(step_min_height)
-        s4_layout = QVBoxLayout(step4_group)
+        col4.setAlignment(Qt.AlignTop)
+        self.step4_group = QGroupBox("4. ILDA (compute)")
+        self.step4_group.setObjectName("")
+        self.step4_group.setMinimumHeight(0)
+        s4_layout = QVBoxLayout(self.step4_group)
+        s4_layout.setAlignment(Qt.AlignTop)
+        s4_layout.setSpacing(4)
 
         self.btn_ilda = QPushButton("Compute ILDA")
         self.btn_ilda.setObjectName("")
         s4_layout.addWidget(self.btn_ilda)
 
-        s4_layout.addStretch()
-        col4.addWidget(step4_group)
+        col4.addWidget(self.step4_group)
 
         # Arcade output parameters
         self.grp_arcade_output = QGroupBox("Arcade output")
         self.grp_arcade_output.setObjectName("")
-        self.grp_arcade_output.setMinimumHeight(step_min_height)
+        self.grp_arcade_output.setMinimumHeight(0)
         arcade_out_layout = QVBoxLayout(self.grp_arcade_output)
+        arcade_out_layout.setAlignment(Qt.AlignTop)
+        arcade_out_layout.setAlignment(Qt.AlignTop)
 
         row_kpps = QHBoxLayout()
         row_kpps.addWidget(QLabel("Kpps :"))
@@ -327,13 +319,55 @@ class PipelinePanel(QGroupBox):
         self.spin_arcade_fill_ratio.setValue(0.95)
         row_arcade_fill.addWidget(self.spin_arcade_fill_ratio)
         arcade_out_layout.addLayout(row_arcade_fill)
-        col4.addWidget(self.grp_arcade_output)
+
+        # ILDA export options
+        self.grp_ilda_export = QGroupBox("ILDA export")
+        self.grp_ilda_export.setObjectName("")
+        self.grp_ilda_export.setMinimumHeight(0)
+        ilda_export_layout = QVBoxLayout(self.grp_ilda_export)
+        ilda_export_layout.setAlignment(Qt.AlignTop)
+        self.check_ilda_swap_rb = QCheckBox("Swap R/B for ILDA export")
+        self.check_ilda_swap_rb.setChecked(False)
+        ilda_export_layout.addWidget(self.check_ilda_swap_rb)
 
         # Classic ILDA parameters
         self.grp_ilda_advanced = QGroupBox("ILDA Parameters (classic)")
         self.grp_ilda_advanced.setObjectName("")
-        self.grp_ilda_advanced.setMinimumHeight(step_min_height)
+        self.grp_ilda_advanced.setMinimumHeight(0)
         ilda_adv_layout = QVBoxLayout(self.grp_ilda_advanced)
+        ilda_adv_layout.setAlignment(Qt.AlignTop)
+
+        # Arcade advanced parameters
+        self.grp_arcade_advanced = QGroupBox("Arcade advanced")
+        self.grp_arcade_advanced.setObjectName("")
+        self.grp_arcade_advanced.setMinimumHeight(0)
+        arcade_adv_layout = QVBoxLayout(self.grp_arcade_advanced)
+        arcade_adv_layout.setAlignment(Qt.AlignTop)
+
+        row_simplify = QHBoxLayout()
+        row_simplify.addWidget(QLabel("Simplify epsilon :"))
+        self.spin_arcade_simplify_eps = QDoubleSpinBox()
+        self.spin_arcade_simplify_eps.setRange(0.0, 50.0)
+        self.spin_arcade_simplify_eps.setSingleStep(0.25)
+        self.spin_arcade_simplify_eps.setDecimals(3)
+        self.spin_arcade_simplify_eps.setValue(2.0)
+        row_simplify.addWidget(self.spin_arcade_simplify_eps)
+        arcade_adv_layout.addLayout(row_simplify)
+
+        row_min_poly = QHBoxLayout()
+        row_min_poly.addWidget(QLabel("Min polygon length :"))
+        self.spin_arcade_min_poly_len = QSpinBox()
+        self.spin_arcade_min_poly_len.setRange(1, 1000)
+        self.spin_arcade_min_poly_len.setValue(10)
+        row_min_poly.addWidget(self.spin_arcade_min_poly_len)
+        arcade_adv_layout.addLayout(row_min_poly)
+
+        self.grp_arcade_advanced.setVisible(False)
+        self.check_arcade_advanced.toggled.connect(
+            self.grp_arcade_advanced.setVisible
+        )
+        arcade_layout.addWidget(self.grp_arcade_advanced)
+        ilda_adv_layout.setAlignment(Qt.AlignTop)
 
         row_fit = QHBoxLayout()
         row_fit.addWidget(QLabel("Fit axis :"))
@@ -364,15 +398,14 @@ class PipelinePanel(QGroupBox):
         row_min_rel.addWidget(self.spin_ilda_min_rel_size)
         ilda_adv_layout.addLayout(row_min_rel)
 
-        col4.addWidget(self.grp_ilda_advanced)
 
-        col4.addStretch()
         col4_widget = QWidget()
         col4_widget.setLayout(col4)
-        col4_widget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-        step4_group.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-        self.grp_arcade_output.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-        self.grp_ilda_advanced.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        col4_widget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Minimum)
+        self.step4_group.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Minimum)
+        self.grp_arcade_output.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Minimum)
+        self.grp_ilda_advanced.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Minimum)
+        self.grp_ilda_export.setSizePolicy(QSizePolicy.Minimum, QSizePolicy.Minimum)
         self.col4_widget = col4_widget
 
         # Previews row
@@ -381,7 +414,8 @@ class PipelinePanel(QGroupBox):
         self.grp_preview_png.setMinimumHeight(preview_min_height)
         self.grp_preview_png.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         p1_layout = QVBoxLayout(self.grp_preview_png)
-        self.preview_png = RasterPreview()
+        self.preview_png = RasterPreview(min_size=preview_size)
+        self.preview_png.setMinimumSize(preview_size)
         self.preview_png.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         p1_layout.addWidget(self.preview_png)
 
@@ -390,7 +424,8 @@ class PipelinePanel(QGroupBox):
         self.grp_preview_bmp.setMinimumHeight(preview_min_height)
         self.grp_preview_bmp.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         p2_layout = QVBoxLayout(self.grp_preview_bmp)
-        self.preview_bmp = RasterPreview()
+        self.preview_bmp = RasterPreview(min_size=preview_size)
+        self.preview_bmp.setMinimumSize(preview_size)
         self.preview_bmp.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         p2_layout.addWidget(self.preview_bmp)
 
@@ -402,13 +437,17 @@ class PipelinePanel(QGroupBox):
         self.arcade_preview_stack = QStackedLayout()
         self.arcade_preview_label = QLabel("No preview available")
         self.arcade_preview_label.setAlignment(Qt.AlignCenter)
-        self.preview_arcade = RasterPreview()
+        self.arcade_preview_label.setMinimumSize(preview_size)
+        self.arcade_preview_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.preview_arcade = RasterPreview(min_size=preview_size)
+        self.preview_arcade.setMinimumSize(preview_size)
         self.preview_arcade.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self.arcade_preview_stack.addWidget(self.arcade_preview_label)
         self.arcade_preview_stack.addWidget(self.preview_arcade)
         self.arcade_preview_stack.setCurrentWidget(self.arcade_preview_label)
         arcade_preview_container = QWidget()
         arcade_preview_container.setLayout(self.arcade_preview_stack)
+        arcade_preview_container.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         arcade_prev_layout.addWidget(arcade_preview_container)
 
         self.grp_preview_svg = QGroupBox("SVG preview")
@@ -416,7 +455,8 @@ class PipelinePanel(QGroupBox):
         self.grp_preview_svg.setMinimumHeight(preview_min_height)
         self.grp_preview_svg.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         p3_layout = QVBoxLayout(self.grp_preview_svg)
-        self.preview_svg = SvgPreview()
+        self.preview_svg = SvgPreview(min_size=preview_size)
+        self.preview_svg.setMinimumSize(preview_size)
         self.preview_svg.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         p3_layout.addWidget(self.preview_svg)
 
@@ -425,16 +465,8 @@ class PipelinePanel(QGroupBox):
         self.grp_preview_ilda.setMinimumHeight(preview_min_height)
         self.grp_preview_ilda.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         p4_layout = QVBoxLayout(self.grp_preview_ilda)
-        palette_row = QHBoxLayout()
-        palette_row.addWidget(QLabel("Preview palette:"))
-        self.combo_ilda_palette = QComboBox()
-        self.combo_ilda_palette.addItem("Auto", "auto")
-        self.combo_ilda_palette.addItem("IDTF 14 (64)", "idtf14")
-        self.combo_ilda_palette.addItem("ILDA 64", "ilda64")
-        self.combo_ilda_palette.addItem("White 63", "white63")
-        palette_row.addWidget(self.combo_ilda_palette, 1)
-        p4_layout.addLayout(palette_row)
-        self.preview_ilda = RasterPreview()
+        self.preview_ilda = RasterPreview(min_size=preview_size)
+        self.preview_ilda.setMinimumSize(preview_size)
         self.preview_ilda.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         p4_layout.addWidget(self.preview_ilda)
 
@@ -444,22 +476,75 @@ class PipelinePanel(QGroupBox):
         steps_layout.addWidget(self.col3_widget, 0, 3)
         steps_layout.addWidget(self.col4_widget, 0, 4)
 
+        # ---- ILDA preview controls (moved out of preview box) ----
+        self.grp_ilda_preview_controls = QGroupBox("ILDA preview")
+        self.grp_ilda_preview_controls.setObjectName("")
+        ilda_preview_layout = QVBoxLayout(self.grp_ilda_preview_controls)
+        palette_row = QHBoxLayout()
+        palette_row.addWidget(QLabel("Preview palette:"))
+        self.combo_ilda_palette = QComboBox()
+        self.combo_ilda_palette.addItem("Auto", "auto")
+        self.combo_ilda_palette.addItem("IDTF 14 (64)", "idtf14")
+        self.combo_ilda_palette.addItem("ILDA 64", "ilda64")
+        self.combo_ilda_palette.addItem("White 63", "white63")
+        palette_row.addWidget(self.combo_ilda_palette, 1)
+        ilda_preview_layout.addLayout(palette_row)
+        self.check_ilda_grid = QCheckBox("Show ILDA grid")
+        self.check_ilda_grid.setChecked(False)
+        ilda_preview_layout.addWidget(self.check_ilda_grid)
+        self.check_ilda_fit_height = QCheckBox("Fit preview height")
+        self.check_ilda_fit_height.setChecked(False)
+        ilda_preview_layout.addWidget(self.check_ilda_fit_height)
+        ilda_preview_layout.addStretch()
+        self.check_ilda_grid.toggled.connect(self.preview_ilda.set_grid_enabled)
+
+        # ---- Output parameters ----
+        self.output_group = QGroupBox("Output parameters")
+        self.output_group.setObjectName("")
+        output_layout = QHBoxLayout(self.output_group)
+        output_layout.setContentsMargins(6, 6, 6, 6)
+        output_layout.setSpacing(6)
+        output_layout.addWidget(self.grp_arcade_output, 1)
+        output_layout.addWidget(self.grp_ilda_advanced, 1)
+        output_layout.addWidget(self.grp_ilda_preview_controls, 0)
+        output_layout.addWidget(self.grp_ilda_export, 0)
+
         # ---- Previews ----
         self.previews_group = QGroupBox("Previews")
         self.previews_group.setObjectName("")
-        previews_layout = QGridLayout(self.previews_group)
-        previews_layout.setContentsMargins(8, 8, 8, 8)
-        previews_layout.setHorizontalSpacing(8)
-        previews_layout.setVerticalSpacing(8)
-        previews_layout.setRowStretch(0, 1)
-        for col in range(5):
-            previews_layout.setColumnStretch(col, 1)
+        self.previews_container = QVBoxLayout(self.previews_group)
+        self.previews_container.setContentsMargins(8, 8, 8, 8)
+        self.previews_container.setSpacing(8)
 
-        previews_layout.addWidget(self.grp_preview_png, 0, 0)
-        previews_layout.addWidget(self.grp_preview_bmp, 0, 1)
-        previews_layout.addWidget(self.grp_preview_arcade, 0, 2)
-        previews_layout.addWidget(self.grp_preview_svg, 0, 3)
-        previews_layout.addWidget(self.grp_preview_ilda, 0, 4)
+        self.previews_grid = QGridLayout()
+        self.previews_grid.setHorizontalSpacing(8)
+        self.previews_grid.setVerticalSpacing(8)
+        self.previews_grid.setRowStretch(0, 1)
+        self.previews_grid_container = QWidget()
+        previews_grid_layout = QVBoxLayout(self.previews_grid_container)
+        previews_grid_layout.setContentsMargins(0, 0, 0, 0)
+        previews_grid_layout.addLayout(self.previews_grid)
+        self.previews_grid_container.setSizePolicy(
+            QSizePolicy.Expanding, QSizePolicy.Expanding
+        )
+        self.output_group.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
+
+        self.output_toggle = QToolButton()
+        self.output_toggle.setText("Output parameters")
+        self.output_toggle.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
+        self.output_toggle.setArrowType(Qt.RightArrow)
+        self.output_toggle.setCheckable(True)
+        self.output_toggle.setChecked(False)
+        self.output_toggle.toggled.connect(self._toggle_output_group)
+
+        output_toggle_row = QHBoxLayout()
+        output_toggle_row.addWidget(self.output_toggle)
+        output_toggle_row.addStretch()
+
+        self.previews_container.addWidget(self.previews_grid_container, 1)
+        self.previews_container.addLayout(output_toggle_row)
+        self.previews_container.addWidget(self.output_group, 0)
+        self.output_group.setVisible(False)
 
         pipe_layout.addWidget(self.steps_group)
         pipe_layout.addWidget(self.previews_group)
@@ -504,36 +589,103 @@ class PipelinePanel(QGroupBox):
         self.grp_arcade_opencv.setEnabled(run_enabled)
         self.grp_arcade_output.setEnabled(run_enabled)
         self.grp_ilda_advanced.setEnabled(run_enabled)
+        self.grp_ilda_preview_controls.setEnabled(run_enabled)
+        self.grp_ilda_export.setEnabled(run_enabled)
+        self.grp_arcade_advanced.setEnabled(run_enabled)
         self.update_mode_ui()
 
     def update_mode_ui(self) -> None:
         mode = self._mode_key or "classic"
         is_arcade = str(mode).lower() == "arcade"
 
+        self._apply_mode_layout(is_arcade)
+
         self.grp_arcade_output.setVisible(is_arcade)
         self.grp_ilda_advanced.setVisible(not is_arcade)
+        self.grp_arcade_advanced.setVisible(is_arcade and self.check_arcade_advanced.isChecked())
         self.btn_ilda.setText(
             "Compute Arcade (from frames)" if is_arcade else "Compute ILDA"
         )
 
+        if is_arcade:
+            self.grp_arcade_opencv.setTitle("2. Arcade (OpenCV)")
+            self.step4_group.setTitle("3. ILDA (compute)")
+        else:
+            self.grp_arcade_opencv.setTitle("Arcade (OpenCV)")
+            self.step4_group.setTitle("4. ILDA (compute)")
+
         run_enabled = not self._ui_busy
         self.step2_group.setEnabled(run_enabled and not is_arcade)
         self.step3_group.setEnabled(run_enabled and not is_arcade)
-        self.grp_ilda_advanced.setEnabled(run_enabled and not is_arcade)
-        self.grp_arcade_opencv.setEnabled(run_enabled and is_arcade)
-        self.btn_arcade.setEnabled(run_enabled and is_arcade)
-        self.grp_preview_arcade.setEnabled(is_arcade)
-        self.label_flow.setText(
-            "Current pipeline flow: FFmpeg -> Arcade -> ILDA"
-            if is_arcade
-            else "Current pipeline flow: FFmpeg -> BMP -> Potrace -> ILDA"
+
+    def _toggle_output_group(self, checked: bool) -> None:
+        self.output_group.setVisible(checked)
+        self.output_toggle.setArrowType(
+            Qt.DownArrow if checked else Qt.RightArrow
         )
-        if not is_arcade:
-            self.clear_arcade_preview()
 
     def set_mode_key(self, mode_key: str) -> None:
         self._mode_key = mode_key
         self.update_mode_ui()
+
+    def _apply_mode_layout(self, is_arcade: bool) -> None:
+        self._configure_steps_layout(is_arcade)
+        self._configure_previews_layout(is_arcade)
+
+    def _clear_layout(self, layout: QGridLayout | QVBoxLayout | QHBoxLayout) -> None:
+        while layout.count():
+            item = layout.takeAt(0)
+            if item is None:
+                continue
+            widget = item.widget()
+            if widget is not None:
+                widget.setParent(None)
+                continue
+            child_layout = item.layout()
+            if child_layout is not None:
+                self._clear_layout(child_layout)
+
+    def _configure_steps_layout(self, is_arcade: bool) -> None:
+        self._clear_layout(self.steps_layout)
+        if is_arcade:
+            self.steps_layout.addWidget(self.col1_widget, 0, 0)
+            self.steps_layout.addWidget(self.arcade_widget, 0, 1)
+            self.steps_layout.addWidget(self.col4_widget, 0, 2)
+            for col in range(5):
+                self.steps_layout.setColumnStretch(col, 1 if col < 3 else 0)
+        else:
+            self.steps_layout.addWidget(self.col1_widget, 0, 0)
+            self.steps_layout.addWidget(self.col2_widget, 0, 1)
+            self.steps_layout.addWidget(self.col3_widget, 0, 2)
+            self.steps_layout.addWidget(self.col4_widget, 0, 3)
+            for col in range(5):
+                self.steps_layout.setColumnStretch(col, 1 if col < 4 else 0)
+
+    def _configure_previews_layout(self, is_arcade: bool) -> None:
+        self._clear_layout(self.previews_grid)
+        if is_arcade:
+            self.previews_grid.addWidget(self.grp_preview_png, 0, 0)
+            self.previews_grid.addWidget(self.grp_preview_arcade, 0, 1)
+            self.previews_grid.addWidget(self.grp_preview_ilda, 0, 2)
+            for col in range(3):
+                self.previews_grid.setColumnStretch(col, 1)
+            for col in range(3, 5):
+                self.previews_grid.setColumnStretch(col, 0)
+        else:
+            self.previews_grid.addWidget(self.grp_preview_png, 0, 0)
+            self.previews_grid.addWidget(self.grp_preview_bmp, 0, 1)
+            self.previews_grid.addWidget(self.grp_preview_svg, 0, 2)
+            self.previews_grid.addWidget(self.grp_preview_ilda, 0, 3)
+            for col in range(4):
+                self.previews_grid.setColumnStretch(col, 1)
+            self.previews_grid.setColumnStretch(4, 0)
+
+    def set_preview_aspect_ratio(self, ratio: float | None) -> None:
+        self.preview_png.set_aspect_ratio(ratio)
+        self.preview_bmp.set_aspect_ratio(ratio)
+        self.preview_svg.set_aspect_ratio(ratio)
+        self.preview_arcade.set_aspect_ratio(ratio)
+        self.preview_ilda.set_aspect_ratio(ratio)
 
     def show_arcade_preview(self, path: str) -> None:
         self.preview_arcade.show_image(path)

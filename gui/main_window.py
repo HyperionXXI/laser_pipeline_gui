@@ -51,6 +51,8 @@ class MainWindow(QMainWindow):
         # Log
         self.log_view = QTextEdit()
         self.log_view.setReadOnly(True)
+        self.log_view.setMinimumHeight(80)
+        self.log_view.setMaximumHeight(140)
         main_layout.addWidget(self.log_view)
 
         # Pipeline controller

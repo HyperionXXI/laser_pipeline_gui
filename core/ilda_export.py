@@ -119,6 +119,7 @@ def export_project_to_ilda(
     fill_ratio: float = 0.95,
     min_rel_size: float = 0.01,    # accepté, pas encore utilisé ici
     mode: str = "classic",
+    swap_rb: bool = False,
     check_cancel: Optional[Callable[[], bool]] = None,
     report_progress: Optional[Callable[[int, int], None]] = None,
 ) -> Path:
@@ -174,6 +175,8 @@ def export_project_to_ilda(
                     continue
 
                 rgb = _parse_data_rgb(elem.get("data-rgb")) or (255, 255, 255)
+                if swap_rb:
+                    rgb = (rgb[2], rgb[1], rgb[0])
 
                 try:
                     sp = parse_path(d)

@@ -47,7 +47,14 @@ class PipelineController(QObject):
         self._cancel_evt.set()
         self._log("[Pipeline] Cancel requested...")
 
-    def start_ffmpeg(self, video_path: str, project: str, fps: int) -> None:
+    def start_ffmpeg(
+        self,
+        video_path: str,
+        project: str,
+        fps: int,
+        max_frames: int = 0,
+        scale: float | None = None,
+    ) -> None:
         self._start_background(
             _Task(
                 step_name="ffmpeg",
@@ -55,6 +62,8 @@ class PipelineController(QObject):
                     video_path,
                     project,
                     fps,
+                    max_frames=max_frames,
+                    scale=scale,
                     progress_cb=self._make_progress_cb(top_step="ffmpeg"),
                     cancel_cb=self._make_cancel_cb(),
                 ),
@@ -84,12 +93,13 @@ class PipelineController(QObject):
             )
         )
 
-    def start_potrace(self, project: str) -> None:
+    def start_potrace(self, project: str, max_frames: Optional[int]) -> None:
         self._start_background(
             _Task(
                 step_name="potrace",
                 fn=lambda: run_potrace_step(
                     project,
+                    max_frames=max_frames,
                     progress_cb=self._make_progress_cb(top_step="potrace"),
                     cancel_cb=self._make_cancel_cb(),
                 ),
@@ -104,6 +114,7 @@ class PipelineController(QObject):
         fit_axis: str = "max",
         fill_ratio: float = 0.95,
         min_rel_size: float = 0.01,
+        swap_rb: bool = False,
     ) -> None:
         self._start_background(
             _Task(
@@ -114,6 +125,7 @@ class PipelineController(QObject):
                     fill_ratio,
                     min_rel_size,
                     ilda_mode,
+                    swap_rb=swap_rb,
                     progress_cb=self._make_progress_cb(top_step="ilda"),
                     cancel_cb=self._make_cancel_cb(),
                 ),
@@ -156,6 +168,7 @@ class PipelineController(QObject):
         use_thinning: bool,
         max_frames: Optional[int],
         ilda_mode: str = "classic",
+        ffmpeg_scale: float | None = None,
         fit_axis: str = "max",
         fill_ratio: float = 0.95,
         min_rel_size: float = 0.01,
@@ -189,6 +202,7 @@ class PipelineController(QObject):
                     use_thinning=use_thinning,
                     max_frames=max_frames_int,
                     ilda_mode=ilda_mode,
+                    ffmpeg_scale=ffmpeg_scale,
                     fit_axis=fit_axis,
                     fill_ratio=fill_ratio,
                     min_rel_size=min_rel_size,

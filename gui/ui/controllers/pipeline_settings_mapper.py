@@ -41,6 +41,7 @@ def collect_settings(
         canny1=int(pipeline_panel.spin_arcade_canny1.value()),
         canny2=int(pipeline_panel.spin_arcade_canny2.value()),
         blur_ksize=int(pipeline_panel.spin_arcade_blur_ksize.value()),
+        skeleton_mode=bool(pipeline_panel.check_arcade_skeleton.isChecked()),
         simplify_eps=float(pipeline_panel.spin_arcade_simplify_eps.value()),
         min_poly_len=int(pipeline_panel.spin_arcade_min_poly_len.value()),
     )
@@ -65,6 +66,7 @@ def collect_settings(
         classic=ilda_classic,
         arcade_opencv=arcade_opencv,
         arcade_output=arcade_output,
+        swap_rb=bool(pipeline_panel.check_ilda_swap_rb.isChecked()),
     )
     preview = PreviewSettings(palette=str(preview_controller.get_palette_name()))
     return PipelineSettings(

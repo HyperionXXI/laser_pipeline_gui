@@ -148,19 +148,20 @@ class SuggestionService:
             blur_ksize = 3
 
         if stats.edge > 0.2:
-            simplify_eps = 3.0
-            min_poly_len = 15
-        elif stats.edge > 0.1:
-            simplify_eps = 2.5
-            min_poly_len = 12
-        elif stats.edge > 0.05:
-            simplify_eps = 2.0
             min_poly_len = 10
-        else:
-            simplify_eps = 1.5
+        elif stats.edge > 0.1:
             min_poly_len = 8
+        elif stats.edge > 0.05:
+            min_poly_len = 6
+        else:
+            min_poly_len = 5
 
         thinning = stats.edge < 0.05
+        simplify_eps = 0.8
+        kpps = 60
+        ppf_ratio = 1.6
+        max_points_per_frame = 12000
+        skeleton_mode = True
 
         return SuggestedParams(
             threshold=threshold_pct,
@@ -168,8 +169,12 @@ class SuggestionService:
             canny1=c1,
             canny2=c2,
             blur_ksize=blur_ksize,
+            skeleton_mode=skeleton_mode,
             simplify_eps=simplify_eps,
             min_poly_len=min_poly_len,
+            kpps=kpps,
+            ppf_ratio=ppf_ratio,
+            max_points_per_frame=max_points_per_frame,
         )
 
     def _cleanup_frames(self, frames: list[Path]) -> None:

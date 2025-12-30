@@ -13,6 +13,7 @@ def extract_frames(
     fps: int,
     *,
     max_frames: int = 0,  # 0 = toutes
+    scale: float | None = None,
 ) -> Path:
     """
     Extrait les frames PNG de input_video dans:
@@ -30,6 +31,10 @@ def extract_frames(
 
     out_pattern = out_dir / "frame_%04d.png"
 
+    vf = f"fps={int(fps)}"
+    if scale is not None and float(scale) > 1.0:
+        vf = f"{vf},scale=iw*{float(scale)}:ih*{float(scale)}:flags=lanczos"
+
     cmd: list[str] = [
         str(FFMPEG_PATH),
         "-y",
@@ -39,7 +44,7 @@ def extract_frames(
         "-i",
         str(input_video),
         "-vf",
-        f"fps={int(fps)}",
+        vf,
     ]
 
     if int(max_frames) > 0:

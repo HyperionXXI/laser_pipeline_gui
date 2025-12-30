@@ -19,72 +19,84 @@ class GeneralPanel(QGroupBox):
         self.setObjectName("sectionGroup")
 
         layout = QVBoxLayout(self)
+        layout.setContentsMargins(8, 6, 8, 6)
+        layout.setSpacing(6)
 
-        # Video row
-        row_video = QHBoxLayout()
-        row_video.addWidget(QLabel("Video source:"))
+        def _compact_row(row: QHBoxLayout) -> None:
+            row.setContentsMargins(0, 0, 0, 0)
+            row.setSpacing(6)
+
+        def _compact_control(widget: QWidget, height: int = 24) -> None:
+            widget.setFixedHeight(height)
+
+        # Row 1: video
+        row_primary = QHBoxLayout()
+        row_primary.addWidget(QLabel("Video source:"))
         self.edit_video_path = QLineEdit()
-        row_video.addWidget(self.edit_video_path)
+        row_primary.addWidget(self.edit_video_path, 1)
         self.btn_browse_video = QPushButton("Browse...")
-        row_video.addWidget(self.btn_browse_video)
-        layout.addLayout(row_video)
+        row_primary.addWidget(self.btn_browse_video)
+        _compact_row(row_primary)
+        _compact_control(self.edit_video_path)
+        _compact_control(self.btn_browse_video)
+        layout.addLayout(row_primary)
 
-        # Project row
-        row_project = QHBoxLayout()
-        row_project.addWidget(QLabel("Project name:"))
+        # Row 2: project/fps/mode + suggestions + actions
+        self._suggested_mode_key: str | None = None
+        self._suggested_project_name: str | None = None
+        row_secondary = QHBoxLayout()
+        left_group = QHBoxLayout()
+        left_group.addWidget(QLabel("Project name:"))
         self.edit_project = QLineEdit("project_demo")
-        row_project.addWidget(self.edit_project)
-        layout.addLayout(row_project)
-
-        # FPS row
-        row_fps = QHBoxLayout()
-        row_fps.addWidget(QLabel("FPS:"))
+        left_group.addWidget(self.edit_project)
+        left_group.addSpacing(8)
+        left_group.addWidget(QLabel("FPS:"))
         self.spin_fps = QSpinBox()
         self.spin_fps.setRange(1, 200)
         self.spin_fps.setValue(25)
-        row_fps.addWidget(self.spin_fps)
-        layout.addLayout(row_fps)
-
-        # Max frames row (global)
-        row_max = QHBoxLayout()
-        row_max.addWidget(QLabel("Max frames (0 = all):"))
+        left_group.addWidget(self.spin_fps)
+        left_group.addSpacing(8)
+        left_group.addWidget(QLabel("Max frames (0 = all):"))
         self.spin_max_frames = QSpinBox()
         self.spin_max_frames.setRange(0, 999999)
         self.spin_max_frames.setValue(0)
-        row_max.addWidget(self.spin_max_frames)
-        layout.addLayout(row_max)
-
-        # Mode row
-        row_mode = QHBoxLayout()
-        row_mode.addWidget(QLabel("Mode:"))
+        left_group.addWidget(self.spin_max_frames)
+        left_group.addSpacing(8)
+        left_group.addWidget(QLabel("Mode:"))
         self.combo_ilda_mode = QComboBox()
         self.combo_ilda_mode.addItem("Classic (B/W)", "classic")
         self.combo_ilda_mode.addItem("Arcade (experimental)", "arcade")
         self.combo_ilda_mode.setCurrentIndex(0)
-        row_mode.addWidget(self.combo_ilda_mode)
-        layout.addLayout(row_mode)
+        left_group.addWidget(self.combo_ilda_mode)
+        _compact_row(left_group)
 
-        # Mode suggestion row
-        self._suggested_mode_key: str | None = None
-        self._suggested_project_name: str | None = None
-        row_suggest = QHBoxLayout()
-        row_suggest.addWidget(QLabel("Suggested mode:"))
-        self.label_mode_suggestion = QLabel("—")
-        row_suggest.addWidget(self.label_mode_suggestion, 1)
+        right_group = QHBoxLayout()
+        right_group.addWidget(QLabel("Suggested mode:"))
+        self.label_mode_suggestion = QLabel("-")
+        right_group.addWidget(self.label_mode_suggestion)
+        right_group.addSpacing(8)
+        right_group.addWidget(QLabel("Suggested project:"))
+        self.label_project_suggestion = QLabel("-")
+        right_group.addWidget(self.label_project_suggestion)
+        right_group.addSpacing(8)
         self.btn_apply_mode_suggestion = QPushButton("Apply suggestion")
         self.btn_apply_mode_suggestion.setEnabled(False)
-        row_suggest.addWidget(self.btn_apply_mode_suggestion)
-        layout.addLayout(row_suggest)
-
-        row_project_suggest = QHBoxLayout()
-        row_project_suggest.addWidget(QLabel("Suggested project:"))
-        self.label_project_suggestion = QLabel("—")
-        row_project_suggest.addWidget(self.label_project_suggestion, 1)
-        layout.addLayout(row_project_suggest)
-
-        # Test button
+        right_group.addWidget(self.btn_apply_mode_suggestion)
         self.btn_test = QPushButton("Test settings")
-        layout.addWidget(self.btn_test)
+        right_group.addWidget(self.btn_test)
+        _compact_row(right_group)
+
+        row_secondary.addLayout(left_group)
+        row_secondary.addStretch()
+        row_secondary.addLayout(right_group)
+        _compact_row(row_secondary)
+        _compact_control(self.edit_project)
+        _compact_control(self.spin_fps)
+        _compact_control(self.spin_max_frames)
+        _compact_control(self.combo_ilda_mode)
+        _compact_control(self.btn_apply_mode_suggestion)
+        _compact_control(self.btn_test)
+        layout.addLayout(row_secondary)
 
     def set_mode_suggestion(self, mode_key: str, reason: str = "") -> None:
         self._suggested_mode_key = mode_key

@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Optional, Union
 
 from PySide6.QtCore import Qt, QSize
-from PySide6.QtGui import QImage, QPainter, QPixmap, QPixmapCache
+from PySide6.QtGui import QColor, QImage, QPainter, QPen, QPixmap, QPixmapCache
 from PySide6.QtSvg import QSvgRenderer
 from PySide6.QtWidgets import QLabel, QSizePolicy, QVBoxLayout, QWidget
 
@@ -27,11 +27,18 @@ class RasterPreview(QWidget):
     - Scales on resize (KeepAspectRatio)
     """
 
-    def __init__(self, *, min_size: QSize = QSize(240, 160), parent: Optional[QWidget] = None) -> None:
+    def __init__(
+        self,
+        *,
+        min_size: QSize = QSize(180, 120),
+        parent: Optional[QWidget] = None,
+    ) -> None:
         super().__init__(parent)
 
         self._state = PreviewState()
         self._pixmap_src: Optional[QPixmap] = None
+        self._aspect_ratio: Optional[float] = None
+        self._grid_enabled = False
 
         self._label = QLabel(self)
         self._label.setAlignment(Qt.AlignCenter)
@@ -43,7 +50,9 @@ class RasterPreview(QWidget):
         lay.setContentsMargins(0, 0, 0, 0)
         lay.addWidget(self._label)
 
-        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        size_policy = QSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        size_policy.setHeightForWidth(True)
+        self.setSizePolicy(size_policy)
         self.setMinimumSize(min_size)
 
         self.clear()
@@ -60,6 +69,32 @@ class RasterPreview(QWidget):
     def clear_image(self) -> None:
         """Compat alias: some callers use clear_image()."""
         self.clear_preview()
+
+    def set_aspect_ratio(self, ratio: Optional[float]) -> None:
+        if ratio is None or ratio <= 0:
+            self._aspect_ratio = None
+        else:
+            self._aspect_ratio = float(ratio)
+        self.updateGeometry()
+        self._apply_scaled_pixmap()
+
+    def set_grid_enabled(self, enabled: bool) -> None:
+        self._grid_enabled = bool(enabled)
+        self._apply_scaled_pixmap()
+
+    def hasHeightForWidth(self) -> bool:  # noqa: N802
+        return self._aspect_ratio is not None
+
+    def heightForWidth(self, width: int) -> int:  # noqa: N802
+        if self._aspect_ratio is None or width <= 0:
+            return super().heightForWidth(width)
+        return max(1, int(round(width / self._aspect_ratio)))
+
+    def sizeHint(self) -> QSize:  # noqa: N802
+        base = self.minimumSize()
+        if self._aspect_ratio is None:
+            return base
+        return QSize(base.width(), max(base.height(), self.heightForWidth(base.width())))
 
 
 
@@ -100,16 +135,67 @@ class RasterPreview(QWidget):
         self._apply_scaled_pixmap()
 
     def _apply_scaled_pixmap(self) -> None:
-        # If no image, keep a null pixmap; black background + layout do the stretch.
-        if self._pixmap_src is None or self._pixmap_src.isNull():
-            return
-
         target = self._label.size()
         if target.width() <= 2 or target.height() <= 2:
             return
 
-        scaled = self._pixmap_src.scaled(target, Qt.KeepAspectRatio, Qt.SmoothTransformation)
-        self._label.setPixmap(scaled)
+        if self._pixmap_src is None or self._pixmap_src.isNull():
+            if self._grid_enabled:
+                pm = QPixmap(target)
+                pm.fill(Qt.black)
+                painter = QPainter(pm)
+                try:
+                    self._draw_grid(painter, target)
+                finally:
+                    painter.end()
+                self._label.setPixmap(pm)
+            else:
+                self._label.setPixmap(QPixmap())
+            return
+
+        scaled = self._pixmap_src.scaled(
+            target, Qt.KeepAspectRatio, Qt.SmoothTransformation
+        )
+        if not self._grid_enabled:
+            self._label.setPixmap(scaled)
+            return
+
+        pm = QPixmap(target)
+        pm.fill(Qt.black)
+        painter = QPainter(pm)
+        try:
+            x = int((target.width() - scaled.width()) / 2)
+            y = int((target.height() - scaled.height()) / 2)
+            painter.drawPixmap(x, y, scaled)
+            self._draw_grid(painter, target)
+        finally:
+            painter.end()
+        self._label.setPixmap(pm)
+
+    def _draw_grid(self, painter: QPainter, target: QSize) -> None:
+        size = min(target.width(), target.height())
+        left = int((target.width() - size) / 2)
+        top = int((target.height() - size) / 2)
+        rect = (left, top, size, size)
+
+        grid_pen = QPen(QColor(180, 180, 180, 120), 1)
+        grid_pen.setCosmetic(True)
+        painter.setPen(grid_pen)
+
+        divisions = 10
+        step = size / divisions
+        for i in range(1, divisions):
+            x = int(left + i * step)
+            y = int(top + i * step)
+            painter.drawLine(x, top, x, top + size)
+            painter.drawLine(left, y, left + size, y)
+
+        border_pen = QPen(QColor(220, 220, 220, 160), 1)
+        border_pen.setCosmetic(True)
+        painter.setPen(border_pen)
+        painter.drawRect(left, top, size, size)
+
+        painter.drawEllipse(left, top, size, size)
 
 
 class SvgPreview(QWidget):
@@ -117,11 +203,17 @@ class SvgPreview(QWidget):
     SVG preview (rasterized in the QLabel) with resize scaling.
     """
 
-    def __init__(self, *, min_size: QSize = QSize(240, 160), parent: Optional[QWidget] = None) -> None:
+    def __init__(
+        self,
+        *,
+        min_size: QSize = QSize(180, 120),
+        parent: Optional[QWidget] = None,
+    ) -> None:
         super().__init__(parent)
 
         self._state = PreviewState()
         self._renderer: Optional[QSvgRenderer] = None
+        self._aspect_ratio: Optional[float] = None
 
         self._label = QLabel(self)
         self._label.setAlignment(Qt.AlignCenter)
@@ -133,7 +225,9 @@ class SvgPreview(QWidget):
         lay.setContentsMargins(0, 0, 0, 0)
         lay.addWidget(self._label)
 
-        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        size_policy = QSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        size_policy.setHeightForWidth(True)
+        self.setSizePolicy(size_policy)
         self.setMinimumSize(min_size)
 
         self.clear()
@@ -182,6 +276,28 @@ class SvgPreview(QWidget):
 
     def clear_image(self) -> None:
         self.clear()
+
+    def set_aspect_ratio(self, ratio: Optional[float]) -> None:
+        if ratio is None or ratio <= 0:
+            self._aspect_ratio = None
+        else:
+            self._aspect_ratio = float(ratio)
+        self.updateGeometry()
+        self._rerender()
+
+    def hasHeightForWidth(self) -> bool:  # noqa: N802
+        return self._aspect_ratio is not None
+
+    def heightForWidth(self, width: int) -> int:  # noqa: N802
+        if self._aspect_ratio is None or width <= 0:
+            return super().heightForWidth(width)
+        return max(1, int(round(width / self._aspect_ratio)))
+
+    def sizeHint(self) -> QSize:  # noqa: N802
+        base = self.minimumSize()
+        if self._aspect_ratio is None:
+            return base
+        return QSize(base.width(), max(base.height(), self.heightForWidth(base.width())))
 
     def resizeEvent(self, event) -> None:  # noqa: N802
         super().resizeEvent(event)

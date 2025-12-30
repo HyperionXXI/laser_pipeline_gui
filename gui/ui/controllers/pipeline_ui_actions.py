@@ -109,7 +109,13 @@ class PipelineUiActions:
             return
 
         self._log("[FFmpeg] Computing frame extraction...")
-        self._pipeline_service.start_ffmpeg(settings.general)
+        ffmpeg_scale = None
+        if str(settings.ilda.mode).lower() == "arcade":
+            ffmpeg_scale = 2.0
+        self._pipeline_service.start_ffmpeg(
+            settings.general,
+            ffmpeg_scale=ffmpeg_scale,
+        )
 
     def on_bmp_click(self) -> None:
         settings = collect_settings(
@@ -149,12 +155,17 @@ class PipelineUiActions:
         self._pipeline_service.start_arcade_reexport(settings.general, settings.ilda)
 
     def on_potrace_click(self) -> None:
-        project = (self._general_panel.edit_project.text() or "").strip()
-        if not project:
+        settings = collect_settings(
+            general_panel=self._general_panel,
+            pipeline_panel=self._pipeline_panel,
+            preview_controller=self._preview_controller,
+        )
+        if not settings.general.project:
             self._log("Potrace error: project name is empty.")
             return
-        self._log(f"[Potrace] Computing BMP -> SVG for '{project}'...")
-        self._pipeline_service.start_potrace(project)
+        max_frames = settings.general.max_frames
+        self._log(f"[Potrace] Computing BMP -> SVG for '{settings.general.project}'...")
+        self._pipeline_service.start_potrace(settings.general.project, max_frames)
 
     def on_export_ilda_click(self) -> None:
         settings = collect_settings(
@@ -180,6 +191,7 @@ class PipelineUiActions:
             settings.general.project,
             settings.ilda.classic,
             mode_key,
+            swap_rb=settings.ilda.swap_rb,
         )
 
     def on_execute_all_task(self) -> None:

@@ -22,6 +22,7 @@ def run_ffmpeg_step(
     project: str,
     fps: int,
     max_frames: int = 0,
+    scale: float | None = None,
     progress_cb: Optional[ProgressCallback] = None,
     cancel_cb: Optional[CancelCallback] = None,
     # compat: si d'anciens callers passent des kwargs inattendus, on ignore
@@ -48,6 +49,7 @@ def run_ffmpeg_step(
             p.project,
             p.fps,
             max_frames=p.max_frames,
+            scale=scale,
         )
     except Exception as exc:  # noqa: BLE001
         return StepResult(False, f"Erreur FFmpeg : {exc}")
@@ -67,4 +69,4 @@ def run_ffmpeg_step(
             )
         )
 
-    return StepResult(True, f"Frames computed in: {frames_dir}")
+    return StepResult(True, f"Frames computed in: {frames_dir} ({len(frames)} frames)")

@@ -76,6 +76,7 @@ def run_full_pipeline_step(
     use_thinning: bool = False,
     max_frames: int = 0,
     ilda_mode: str = "classic",
+    ffmpeg_scale: float | None = None,
     fit_axis: str = "max",
     fill_ratio: float = 0.95,
     min_rel_size: float = 0.01,
@@ -131,6 +132,8 @@ def run_full_pipeline_step(
         sig = inspect.signature(run_ffmpeg_step)
         if "max_frames" in sig.parameters:
             ffmpeg_kwargs["max_frames"] = (None if p.max_frames == 0 else p.max_frames)
+        if "scale" in sig.parameters and ffmpeg_scale is not None:
+            ffmpeg_kwargs["scale"] = float(ffmpeg_scale)
     except Exception:
         # Si signature() échoue pour une raison quelconque, on n'envoie rien.
         pass
@@ -194,6 +197,7 @@ def run_full_pipeline_step(
         threshold=p.threshold,
         use_thinning=p.use_thinning,
         max_frames=(None if p.max_frames == 0 else p.max_frames),
+        mode="classic",
         progress_cb=_wrap_progress("bitmap", progress_cb),
         cancel_cb=cancel_cb,
     )

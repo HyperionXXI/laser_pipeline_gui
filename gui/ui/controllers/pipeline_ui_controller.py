@@ -105,6 +105,7 @@ class PipelineUiController:
         path = (self._general_panel.edit_video_path.text() or "").strip()
         self._suggest_mode(path)
         self._suggest_project(path)
+        self._preview_controller.set_preview_aspect_ratio_from_video(path)
 
     def on_apply_mode_suggestion(self) -> None:
         suggested = self._general_panel.get_suggested_mode_key()
@@ -279,11 +280,17 @@ class PipelineUiController:
         blur_ksize = int(result.params.blur_ksize)
         simplify_eps = float(result.params.simplify_eps)
         min_poly_len = int(result.params.min_poly_len)
+        skeleton_mode = bool(result.params.skeleton_mode)
+        kpps = int(result.params.kpps)
+        ppf_ratio = float(result.params.ppf_ratio)
+        max_points = int(result.params.max_points_per_frame)
         mode_key = str(self._general_panel.combo_ilda_mode.currentData() or "classic")
         bmp_summary = f"threshold={threshold_pct}, thinning={thinning}"
         arcade_summary = (
             f"canny1={c1}, canny2={c2}, blur_ksize={blur_ksize}, "
-            f"simplify_eps={simplify_eps}, min_poly_len={min_poly_len}"
+            f"simplify_eps={simplify_eps}, min_poly_len={min_poly_len}, "
+            f"skeleton={skeleton_mode}, kpps={kpps}, "
+            f"ppf_ratio={ppf_ratio}, max_points={max_points}"
         )
         if mode_key.lower() == "arcade":
             self._log(f"[UI] Suggested params (arcade): {arcade_summary}")
@@ -306,9 +313,19 @@ class PipelineUiController:
         self._pipeline_panel.spin_arcade_canny1.setValue(int(params["canny1"]))
         self._pipeline_panel.spin_arcade_canny2.setValue(int(params["canny2"]))
         self._pipeline_panel.spin_arcade_blur_ksize.setValue(int(params["blur_ksize"]))
+        self._pipeline_panel.check_arcade_skeleton.setChecked(
+            bool(params["skeleton_mode"])
+        )
         self._pipeline_panel.spin_arcade_simplify_eps.setValue(
             float(params["simplify_eps"])
         )
         self._pipeline_panel.spin_arcade_min_poly_len.setValue(
             int(params["min_poly_len"])
+        )
+        self._pipeline_panel.spin_arcade_kpps.setValue(int(params["kpps"]))
+        self._pipeline_panel.spin_arcade_ppf_ratio.setValue(
+            float(params["ppf_ratio"])
+        )
+        self._pipeline_panel.spin_arcade_max_points.setValue(
+            int(params["max_points_per_frame"])
         )

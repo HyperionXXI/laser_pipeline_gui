@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import cv2
 from pathlib import Path
 from typing import Callable
 
@@ -43,6 +44,19 @@ class PreviewController:
 
     def get_palette_name(self) -> str:
         return self._get_palette_name()
+
+    def set_preview_aspect_ratio_from_video(self, video_path: str) -> None:
+        ratio = None
+        if video_path:
+            cap = cv2.VideoCapture(video_path)
+            if cap is not None and cap.isOpened():
+                width = cap.get(cv2.CAP_PROP_FRAME_WIDTH)
+                height = cap.get(cv2.CAP_PROP_FRAME_HEIGHT)
+                if height and width:
+                    ratio = float(width) / float(height)
+            if cap is not None:
+                cap.release()
+        self._pipeline_panel.set_preview_aspect_ratio(ratio)
 
     def show_current_frame(self) -> None:
         project = (self._general_panel.edit_project.text() or "").strip()
@@ -249,11 +263,23 @@ class PreviewController:
                 self._pipeline_panel.clear_arcade_preview()
 
     def _render_ilda_preview(self, ilda_path: Path, out_png: Path, ui_frame: int) -> None:
+        swap_rb = False
+        fit_height = False
+        try:
+            swap_rb = bool(self._pipeline_panel.check_ilda_swap_rb.isChecked())
+        except Exception:
+            swap_rb = False
+        try:
+            fit_height = bool(self._pipeline_panel.check_ilda_fit_height.isChecked())
+        except Exception:
+            fit_height = False
         self._preview_service.ensure_ilda_preview(
             ilda_path,
             out_png,
             frame_index_0based=max(0, ui_frame - 1),
             palette_name=self._get_palette_name(),
+            swap_rb=swap_rb,
+            fit_height=fit_height,
         )
         self._pipeline_panel.preview_ilda.show_image(str(out_png))
 
