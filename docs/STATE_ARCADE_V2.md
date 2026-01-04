@@ -7,6 +7,7 @@
 ## Functional status
 - Classic pipeline: FFmpeg -> Bitmap -> Potrace -> ILDA works
 - Arcade v2 pipeline: OpenCV -> lines -> ILDA truecolor works
+- ILDA preview supports formats 0/1/4/5 (indexed + truecolor)
 - UI parameters persist per project in projects/<project>/settings.json
 
 ## ILDA files (binary check)
@@ -14,17 +15,10 @@
 - Classic: format 0 (indexed), magic OK
 
 ## Known issue
-- GUI preview:
-  - Classic: no readable ILDA frames
-  - Arcade: incorrect "missing magic" message even though magic OK
-- Cause: limitations in core/ilda_preview.py
-  - format 0 (Classic) not supported
-  - incorrect magic validation logic in preview (writer is OK)
+- None tracked for ILDA preview at this time.
 
 ## Next planned fix
-1) Extend core/ilda_preview.py to support format 0 (indexed)
-2) Fix preview magic validation
-3) Re-check arcade line quality after preview fix
+1) Re-check arcade line quality and tuning (OpenCV params)
 
 ## Reference videos
 - Classic: La Linea

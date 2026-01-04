@@ -141,14 +141,9 @@ Fix location:
 - core/potrace_vectorize.py and/or core/pipeline/potrace_step.py
 Do NOT patch it downstream in ilda_export.py or GUI.
 
-## D4) ILDA preview bug (Arcade v2 current status)
-Current known issue:
-- Classic preview: no readable ILDA frames
-- Arcade preview: wrong "missing magic" message even though magic OK
-Cause: core/ilda_preview.py limitations:
-- format 0 (Classic) not supported
-- incorrect magic validation logic (preview bug, not writer bug)
-Planned fix: extend preview to support format 0 + correct magic checks.
+## D4) ILDA preview support
+core/ilda_preview.py supports formats 0/1/4/5 and embedded palettes (format 2).
+Avoid reintroducing older preview limitations.
 
 ---
 
