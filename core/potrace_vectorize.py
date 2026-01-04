@@ -87,7 +87,7 @@ def bitmap_to_svg_folder(
 
     for idx, bmp_path in enumerate(bmp_files, start=1):
         if cancel_cb and cancel_cb():
-            raise RuntimeError("Vectorisation Potrace annulée par l'utilisateur.")
+            raise RuntimeError("Potrace vectorization canceled by user.")
 
         svg_path = svg_dir_p / (bmp_path.stem + ".svg")
         _run_potrace_single(bmp_path, svg_path, invert=invert)

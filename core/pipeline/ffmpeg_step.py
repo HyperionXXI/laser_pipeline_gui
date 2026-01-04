@@ -1,69 +1,72 @@
 # core/pipeline/ffmpeg_step.py
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Any
 
 from core.ffmpeg_extract import extract_frames
-from .base import FrameProgress, StepResult, ProgressCallback, CancelCallback
+from core.pipeline.base import StepResult, FrameProgress, ProgressCallback, CancelCallback
+
+
+@dataclass(frozen=True)
+class FfmpegParams:
+    video_path: Path
+    project: str
+    fps: int
+    max_frames: int = 0  # 0 = toutes
 
 
 def run_ffmpeg_step(
-    video_path: str,
+    video_path: Path | str,
     project: str,
     fps: int,
+    max_frames: int = 0,
+    scale: float | None = None,
     progress_cb: Optional[ProgressCallback] = None,
     cancel_cb: Optional[CancelCallback] = None,
+    # compat: si d'anciens callers passent des kwargs inattendus, on ignore
+    **_compat: Any,
 ) -> StepResult:
     """
-    Step pipeline pour l'extraction des frames via FFmpeg.
+    Step FFmpeg: extrait des frames PNG dans projects/<project>/frames.
 
-    Pour l'instant, on ne suit pas FFmpeg frame par frame.
-    On émet un event de départ, puis un event final qui pointe
-    sur la première frame PNG pour la prévisualisation.
+    - max_frames: 0 = toutes (comportement historique)
     """
-    step_name = "ffmpeg"
+    if cancel_cb and cancel_cb():
+        return StepResult(False, "Canceled.")
 
-    # Début : barre indéterminée
-    if progress_cb is not None:
-        progress_cb(
-            FrameProgress(
-                step_name=step_name,
-                message="Démarrage FFmpeg…",
-                frame_index=0,
-                total_frames=None,
-                frame_path=None,
-            )
-        )
-
-    # Lancement réel d'FFmpeg (bloquant)
-    out_dir = extract_frames(video_path, project, fps=fps)
-
-    # Après extraction : on cherche au moins une frame PNG
-    png_files = sorted(Path(out_dir).glob("frame_*.png"))
-    if png_files:
-        # On prend la première frame pour la preview
-        frame_path = png_files[0]
-        total_frames = len(png_files)
-        frame_index = total_frames - 1  # → barre à ~100%
-    else:
-        frame_path = None
-        total_frames = 1
-        frame_index = 0
-
-    if progress_cb is not None:
-        progress_cb(
-            FrameProgress(
-                step_name=step_name,
-                message="Extraction terminée.",
-                frame_index=frame_index,
-                total_frames=total_frames,
-                frame_path=frame_path,
-            )
-        )
-
-    return StepResult(
-        success=True,
-        message=f"Frames extraites dans : {out_dir}",
-        output_dir=Path(out_dir),
+    p = FfmpegParams(
+        video_path=Path(video_path),
+        project=str(project),
+        fps=int(fps),
+        max_frames=int(max_frames or 0),
     )
+
+    try:
+        frames_dir = extract_frames(
+            p.video_path,
+            p.project,
+            p.fps,
+            max_frames=p.max_frames,
+            scale=scale,
+        )
+    except Exception as exc:  # noqa: BLE001
+        return StepResult(False, f"Erreur FFmpeg : {exc}")
+
+    frames = sorted(frames_dir.glob("frame_*.png"))
+    if not frames:
+        return StepResult(False, f"No PNG frames computed in: {frames_dir}")
+
+    if progress_cb:
+        # On expose au moins une frame et un total (utile UI preview/progress).
+        progress_cb(
+            FrameProgress(
+                step_name="ffmpeg",
+                frame_index=0,
+                total_frames=len(frames),
+                frame_path=frames[0],
+            )
+        )
+
+    return StepResult(True, f"Frames computed in: {frames_dir} ({len(frames)} frames)")

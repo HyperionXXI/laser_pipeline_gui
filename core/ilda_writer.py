@@ -1,372 +1,331 @@
-# core/ilda_writer.py
+"""
+core/ilda_writer.py
+
+Writer for ILDA (.ild) files used in this project.
+
+Goals in this repo:
+- Keep the ILDA layer *generic* and reusable (no GUI dependencies).
+- Produce files that are readable by common tools (LaserShowGen, LaserOS, etc.).
+- Be robust against small API changes between exporter/preview modules.
+
+This file intentionally supports TWO calling styles for IldaFrame:
+
+1) "New" style (explicit header):
+    frame = IldaFrame(header=IldaHeader(...), points=[...])
+
+2) "Legacy" style (used by ilda_export.py in this repo for a long time):
+    frame = IldaFrame(name="F0001", company="LPIP", points=[...], projector=0)
+
+The compatibility layer is here to avoid regressions when other modules evolve.
+"""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Iterable, List, Optional, Sequence, Union
+import struct
 from pathlib import Path
-from typing import Iterable, List
 
 
-# ======================================================================
-# Structures ILDA bas niveau
-# ======================================================================
+# ---------------------------
+# Data structures
+# ---------------------------
+
+@dataclass(frozen=True)
+class IldaHeader:
+    """
+    ILDA 32-byte header.
+
+    Layout (big-endian):
+      0..3   : ASCII "ILDA"
+      4..6   : 0x00 0x00 0x00 (reserved)
+      7      : format code (0..5 typically)
+      8..15  : frame name (8 bytes, ASCII, padded with NUL/space)
+      16..23 : company name (8 bytes, ASCII, padded)
+      24..25 : number of records (uint16)
+      26..27 : frame number (uint16)
+      28..29 : total frames (uint16)  (many tools expect "last index", i.e. len(frames)-1)
+      30     : scanner head / projector (uint8)
+      31     : reserved (uint8)
+    """
+    format_code: int
+    frame_name: str = ""
+    company_name: str = ""
+    num_records: int = 0
+    frame_number: int = 0
+    total_frames: int = 0
+    scanner_head: int = 0
 
 
-@dataclass
+@dataclass(frozen=True)
 class IldaPoint:
     """
-    Point ILDA en coordonnées 3D (Z=0 pour nous) avec blanking et index couleur.
+    A logical point used by the exporter.
 
-    Les coordonnées sont attendues déjà normalisées dans l'intervalle
-    [-32768, +32767] pour X/Y/Z.
+    For INDEXED modes (format 0/1):
+      - x, y, (optional z)
+      - blanked
+      - color_index (0..255)
+
+    For TRUECOLOR modes (format 4/5):
+      - x, y, (optional z)
+      - blanked
+      - r, g, b (0..255)
     """
     x: int
     y: int
     z: int = 0
+
     blanked: bool = False
-    color_index: int = 255  # index dans la palette ILDA standard (0–255)
+
+    # Indexed color (formats 0/1)
+    color_index: int = 0
+
+    # Truecolor (formats 4/5)
+    r: Optional[int] = None
+    g: Optional[int] = None
+    b: Optional[int] = None
 
 
-@dataclass
 class IldaFrame:
     """
-    Une frame ILDA (un dessin / état d'animation).
+    Container for one ILDA frame.
+
+    Compatibility note:
+    - Some parts of the repo historically created frames with name/company/projector,
+      not a full IldaHeader object.
+    - The writer accepts both; internally it always exposes .header and .points.
+
+    Public attributes:
+      - header: IldaHeader
+      - points: Sequence[IldaPoint]
+      - format_code: int (shortcut: header.format_code)
+      - record_count: int (shortcut: header.num_records)
     """
-    name: str = ""
-    company: str = "LPIP"
-    points: List[IldaPoint] | None = None
-    projector: int = 0  # numéro de projecteur (0–255)
 
-    def ensure_points(self) -> List[IldaPoint]:
-        if self.points is None:
-            self.points = []
-        return self.points
+    __slots__ = ("header", "points")
 
+    def __init__(
+        self,
+        header: Optional[IldaHeader] = None,
+        points: Optional[Sequence[IldaPoint]] = None,
+        # legacy / convenience kwargs:
+        name: str = "",
+        company: str = "",
+        projector: int = 0,
+        format_code: Optional[int] = None,
+        frame_number: int = 0,
+        total_frames: int = 0,
+    ) -> None:
+        if points is None:
+            points = []
 
-# ======================================================================
-# Header ILDA – implémentation stricte de la spec
-# ======================================================================
-
-
-def _build_ilda_header_3d(
-    frame: IldaFrame,
-    num_points: int,
-    seq_no: int,
-    total_frames: int,
-) -> bytes:
-    """
-    Construit un header ILDA 3D indexed (format code = 0) de 32 octets.
-
-    Spécification (ILDA Image Data Transfer Format) – "3D coordinate image".
-
-    Offsets (0-based) :
-        0–3  : "ILDA"
-        4–6  : 3 octets réservés = 0
-        7    : format code (0 = 3D indexed)
-        8–15 : nom de frame (8 chars, padded avec 0)
-        16–23: nom société (8 chars, padded avec 0)
-        24–25: nombre de points (uint16 big-endian)
-        26–27: numéro de frame (uint16 big-endian)
-        28–29: nombre total de frames dans le fichier (uint16 big-endian)
-        30   : numéro de projecteur (0–255)
-        31   : réservé = 0
-    """
-    header = bytearray(32)
-
-    # "ILDA"
-    header[0:4] = b"ILDA"
-
-    # 3 octets réservés
-    header[4:7] = b"\x00\x00\x00"
-
-    # format code (0 = 3D indexed)
-    header[7] = 0
-
-    # Nom de frame (max 8 caractères ASCII)
-    name_bytes = (frame.name or "").encode("ascii", errors="ignore")[:8]
-    header[8:16] = name_bytes.ljust(8, b"\x00")
-
-    # Nom de société (max 8 caractères ASCII)
-    company_bytes = (frame.company or "").encode("ascii", errors="ignore")[:8]
-    header[16:24] = company_bytes.ljust(8, b"\x00")
-
-    # Nombre de points
-    header[24:26] = int(num_points).to_bytes(2, "big", signed=False)
-
-    # Numéro de frame (seq_no)
-    header[26:28] = int(seq_no).to_bytes(2, "big", signed=False)
-
-    # Nombre total de frames dans le fichier (hors frame EOF)
-    header[28:30] = int(total_frames).to_bytes(2, "big", signed=False)
-
-    # Projecteur
-    header[30] = int(frame.projector) & 0xFF
-
-    # Dernier octet réservé = 0
-    header[31] = 0
-
-    return bytes(header)
-
-
-def _pack_ilda_point(pt: IldaPoint, is_last: bool) -> bytes:
-    """
-    Sérialise un point ILDA 3D indexed (format code 0).
-
-    Layout (8 octets) :
-        X : int16 big-endian
-        Y : int16 big-endian
-        Z : int16 big-endian
-        Status : 1 octet (bit7 = last point, bit6 = blanked)
-        Color index : 1 octet
-    """
-    # Status bits
-    status = 0
-    if is_last:
-        status |= 0x80  # last point
-    if pt.blanked:
-        status |= 0x40  # blanking
-
-    return (
-        int(pt.x).to_bytes(2, "big", signed=True)
-        + int(pt.y).to_bytes(2, "big", signed=True)
-        + int(pt.z).to_bytes(2, "big", signed=True)
-        + bytes((status & 0xFF, int(pt.color_index) & 0xFF))
-    )
-
-def _build_ilda_header(
-    *,
-    format_code: int,
-    name: str,
-    company: str,
-    num_records: int,
-    seq_no: int,
-    total_frames: int,
-    projector: int = 0,
-) -> bytes:
-    """
-    Header ILDA générique (32 octets).
-    format_code:
-      0: 3D indexed
-      2: palette
-    """
-    header = bytearray(32)
-    header[0:4] = b"ILDA"
-    header[4:7] = b"\x00\x00\x00"
-    header[7] = int(format_code) & 0xFF
-
-    name_bytes = (name or "").encode("ascii", errors="ignore")[:8]
-    header[8:16] = name_bytes.ljust(8, b"\x00")
-
-    company_bytes = (company or "").encode("ascii", errors="ignore")[:8]
-    header[16:24] = company_bytes.ljust(8, b"\x00")
-
-    header[24:26] = int(num_records).to_bytes(2, "big", signed=False)
-    header[26:28] = int(seq_no).to_bytes(2, "big", signed=False)
-    header[28:30] = int(total_frames).to_bytes(2, "big", signed=False)
-    header[30] = int(projector) & 0xFF
-    header[31] = 0
-    return bytes(header)
-
-
-def _write_palette_section(
-    f,
-    *,
-    palette_rgb_256: list[tuple[int, int, int]],
-    projector: int = 0,
-    name: str = "PALETTE",
-    company: str = "LPIP",
-) -> None:
-    """
-    Ecrit une section ILDA Format 2 (Color Palette).
-
-    Chaque record = 3 octets: R, G, B. :contentReference[oaicite:4]{index=4}
-    """
-    if len(palette_rgb_256) != 256:
-        raise ValueError("palette_rgb_256 doit contenir exactement 256 entrées (R,G,B).")
-
-    header = _build_ilda_header(
-        format_code=2,
-        name=name,
-        company=company,
-        num_records=256,
-        seq_no=0,
-        total_frames=0,
-        projector=projector,
-    )
-    f.write(header)
-
-    for (r, g, b) in palette_rgb_256:
-        f.write(bytes((int(r) & 0xFF, int(g) & 0xFF, int(b) & 0xFF)))
-
-# ======================================================================
-# Écriture de fichier ILDA
-# ======================================================================
-
-
-def write_ilda_file(path: str | Path, frames: Iterable[IldaFrame]) -> Path:
-    """
-    Écrit un fichier ILDA contenant une ou plusieurs frames 3D indexed.
-
-    - `frames` : iterable d'IldaFrame. Les frames **peuvent** être vides
-      (0 points) afin de conserver la synchronisation temporelle avec
-      d'autres médias (vidéo, audio, etc.).
-    - Une frame EOF spéciale (0 points, num_points=0) est ajoutée en fin
-      comme le recommande la spécification.
-
-    Retourne le Path résultant.
-    """
-    out_path = Path(path)
-    frames_list = list(frames)
-
-    # Cas extrême : aucune frame fournie → on écrit uniquement une EOF.
-    if not frames_list:
-        with out_path.open("wb") as f:
-            eof = IldaFrame(name="", company="", points=[], projector=0)
-            eof_header = _build_ilda_header_3d(
-                eof,
-                num_points=0,
-                seq_no=0,
-                total_frames=0,
+        if header is None:
+            # If format_code not provided, keep it 0 by default; the writer can override
+            # it based on "mode" when writing.
+            fc = 0 if format_code is None else int(format_code)
+            header = IldaHeader(
+                format_code=fc,
+                frame_name=str(name or ""),
+                company_name=str(company or ""),
+                num_records=len(points),
+                frame_number=int(frame_number),
+                total_frames=int(total_frames),
+                scanner_head=int(projector),
             )
-            f.write(eof_header)
-        return out_path
+        else:
+            # Ensure num_records matches points length (source of many subtle ILDA corruptions).
+            if header.num_records != len(points):
+                header = IldaHeader(
+                    format_code=header.format_code,
+                    frame_name=header.frame_name,
+                    company_name=header.company_name,
+                    num_records=len(points),
+                    frame_number=header.frame_number,
+                    total_frames=header.total_frames,
+                    scanner_head=header.scanner_head,
+                )
 
-    total_frames = len(frames_list)
+        self.header = header
+        self.points = list(points)
 
-    with out_path.open("wb") as f:
-        # Frames normales
-        for seq_no, frame in enumerate(frames_list):
-            pts = frame.ensure_points()
-            num_points = len(pts)
+    @property
+    def format_code(self) -> int:
+        return int(self.header.format_code)
 
-            header = _build_ilda_header_3d(
-                frame,
-                num_points=num_points,
-                seq_no=seq_no,
-                total_frames=total_frames,
-            )
-            f.write(header)
-
-            for i, p in enumerate(pts):
-                f.write(_pack_ilda_point(p, is_last=(i == num_points - 1)))
-
-        # Frame EOF : header avec num_points=0
-        eof_frame = IldaFrame(name="", company="", points=[], projector=0)
-        eof_header = _build_ilda_header_3d(
-            eof_frame,
-            num_points=0,
-            seq_no=total_frames,
-            total_frames=total_frames,
-        )
-        f.write(eof_header)
-
-    return out_path
+    @property
+    def record_count(self) -> int:
+        return int(self.header.num_records)
 
 
-# ======================================================================
-# Carré de test (utilisé par les tests unitaires et la doc)
-# ======================================================================
+# ---------------------------
+# Helpers
+# ---------------------------
+
+def _clip_i16(v: int) -> int:
+    if v < -32768:
+        return -32768
+    if v > 32767:
+        return 32767
+    return int(v)
+
+def _clip_u8(v: int) -> int:
+    if v < 0:
+        return 0
+    if v > 255:
+        return 255
+    return int(v)
+
+def _encode_name8(s: str) -> bytes:
+    # Most tools accept ASCII; we replace unknown chars.
+    b = (s or "").encode("ascii", errors="replace")
+    b = b[:8]
+    return b.ljust(8, b"\x00")
+
+def _status_byte(blanked: bool, last_point: bool) -> int:
+    # ILDA status byte:
+    # bit 6 (0x40): blanked (laser off)
+    # bit 7 (0x80): last point
+    st = 0x40 if blanked else 0x00
+    if last_point:
+        st |= 0x80
+    return st
+
+def _write_header(f, h: IldaHeader) -> None:
+    f.write(b"ILDA")
+    f.write(b"\x00\x00\x00")
+    f.write(struct.pack(">B", _clip_u8(h.format_code)))
+    f.write(_encode_name8(h.frame_name))
+    f.write(_encode_name8(h.company_name))
+    f.write(struct.pack(">H", int(h.num_records) & 0xFFFF))
+    f.write(struct.pack(">H", int(h.frame_number) & 0xFFFF))
+    f.write(struct.pack(">H", int(h.total_frames) & 0xFFFF))
+    f.write(struct.pack(">B", _clip_u8(h.scanner_head)))
+    f.write(b"\x00")  # reserved
 
 
-def write_test_square(path: str | Path) -> Path:
-    """
-    Écrit un simple carré dans un fichier ILDA, utile pour des tests
-    rapides avec un viewer ILDA / LaserOS.
-    """
-    out_path = Path(path)
+def _infer_truecolor(points: Sequence[IldaPoint]) -> bool:
+    # If any point has explicit r/g/b, we treat as truecolor.
+    for p in points:
+        if p.r is not None or p.g is not None or p.b is not None:
+            return True
+    return False
 
-    # Carré dans les coordonnées ILDA (-32768..+32767)
-    size = 20000
-    left = -size
-    right = size
-    top = size
-    bottom = -size
 
-    pts: list[IldaPoint] = []
-
-    # On commence en blanked pour éviter un trait depuis l'origine
-    pts.append(IldaPoint(left, top, 0, blanked=True, color_index=1))   # start
-    pts.append(IldaPoint(right, top, 0, blanked=False, color_index=1))  # haut
-    pts.append(IldaPoint(right, bottom, 0, blanked=False, color_index=2))  # droite
-    pts.append(IldaPoint(left, bottom, 0, blanked=False, color_index=3))   # bas
-    pts.append(IldaPoint(left, top, 0, blanked=False, color_index=4))      # gauche
-
-    frame = IldaFrame(
-        name="SQUARE",
-        company="LPIP",
-        points=pts,
-        projector=0,
-    )
-    return write_ilda_file(out_path, [frame])
-
+# ---------------------------
+# Public writer API
+# ---------------------------
 
 def write_ilda_file(
-    path: str | Path,
-    frames: Iterable[IldaFrame],
+    out_path: Union[str, Path],
+    frames: Sequence[IldaFrame],
     *,
-    palette_rgb_256: list[tuple[int, int, int]] | None = None,
+    mode: str = "indexed",
+    force_format: Optional[int] = None,
+    include_eof_header: bool = False,  # <-- NEW (default off)
 ) -> Path:
-    """
-    Ecrit un fichier ILDA.
+    out_path = Path(out_path)
 
-    - Frames: format 0 (3D indexed) comme avant.
-    - Optionnel: une section format 2 (palette) au début, pour que les viewers
-      utilisent NOS couleurs au lieu d'une palette arbitraire.
-    """
-    out_path = Path(path)
-    frames_list = list(frames)
+    # Recommended: total_frames = number of frames (not last index)
+    total_frames = len(frames)
 
     with out_path.open("wb") as f:
-        # 1) Palette optionnelle
-        if palette_rgb_256 is not None:
-            _write_palette_section(f, palette_rgb_256=palette_rgb_256, projector=0)
+        for idx, frame in enumerate(frames):
+            pts = list(frame.points)
 
-        # 2) Frames normales (format 0)
-        if frames_list:
-            total_frames = len(frames_list)
-            for seq_no, frame in enumerate(frames_list):
-                pts = frame.ensure_points()
-                num_points = len(pts)
+            # Decide format code
+            if force_format is not None:
+                fmt = int(force_format)
+            else:
+                if mode.lower() == "truecolor" or _infer_truecolor(pts):
+                    fmt = 5
+                else:
+                    fmt = 0
 
-                header = _build_ilda_header(
-                    format_code=0,
-                    name=frame.name or "",
-                    company=frame.company or "LPIP",
-                    num_records=num_points,
-                    seq_no=seq_no,
-                    total_frames=total_frames,
-                    projector=frame.projector,
-                )
-                f.write(header)
-
-                for i, p in enumerate(pts):
-                    f.write(_pack_ilda_point(p, is_last=(i == num_points - 1)))
-
-            # EOF (format 0, 0 records)
-            eof_header = _build_ilda_header(
-                format_code=0,
-                name="",
-                company="",
-                num_records=0,
-                seq_no=total_frames,
-                total_frames=total_frames,
-                projector=0,
+            h0 = frame.header
+            h = IldaHeader(
+                format_code=fmt,
+                frame_name=h0.frame_name,
+                company_name=h0.company_name,
+                num_records=len(pts),
+                frame_number=idx,
+                total_frames=total_frames,   # <-- FIXED
+                scanner_head=h0.scanner_head,
             )
-            f.write(eof_header)
-        else:
-            # Fichier vide => EOF uniquement
-            eof_header = _build_ilda_header(
+
+            _write_header(f, h)
+
+            for p_i, p in enumerate(pts):
+                last_point = (p_i == len(pts) - 1)
+                st = _status_byte(bool(p.blanked), last_point)
+
+                if fmt == 0:
+                    rec = struct.pack(
+                        ">hhhBB",
+                        _clip_i16(p.x),
+                        _clip_i16(p.y),
+                        _clip_i16(p.z),
+                        _clip_u8(st),
+                        _clip_u8(p.color_index),
+                    )
+                    f.write(rec)
+
+                elif fmt == 1:
+                    rec = struct.pack(
+                        ">hhBB",
+                        _clip_i16(p.x),
+                        _clip_i16(p.y),
+                        _clip_u8(st),
+                        _clip_u8(p.color_index),
+                    )
+                    f.write(rec)
+
+                elif fmt == 4:
+                    r = 255 if p.r is None else p.r
+                    g = 255 if p.g is None else p.g
+                    b = 255 if p.b is None else p.b
+                    rec = struct.pack(
+                        ">hhhBBBB",
+                        _clip_i16(p.x),
+                        _clip_i16(p.y),
+                        _clip_i16(p.z),
+                        _clip_u8(st),
+                        _clip_u8(r),
+                        _clip_u8(g),
+                        _clip_u8(b),
+                    )
+                    f.write(rec)
+
+                elif fmt == 5:
+                    # 2D truecolor: x,y,status,r,g,b => 8 bytes
+                    r = 255 if p.r is None else p.r
+                    g = 255 if p.g is None else p.g
+                    b = 255 if p.b is None else p.b
+                    rec = struct.pack(
+                        ">hhBBBB",
+                        _clip_i16(p.x),
+                        _clip_i16(p.y),
+                        _clip_u8(st),
+                        _clip_u8(r),
+                        _clip_u8(g),
+                        _clip_u8(b),
+                    )
+                    f.write(rec)
+
+                else:
+                    raise ValueError(f"Unsupported ILDA format code for writer: {fmt}")
+
+        # Optional EOF header (some readers like it, others treat it as a frame)
+        if include_eof_header:
+            eof = IldaHeader(
                 format_code=0,
-                name="",
-                company="",
+                frame_name="",
+                company_name="",
                 num_records=0,
-                seq_no=0,
+                frame_number=0,
                 total_frames=0,
-                projector=0,
+                scanner_head=0,
             )
-            f.write(eof_header)
+            _write_header(f, eof)
 
     return out_path
-
-# Alias historique (certains anciens codes importent write_demo_square)
-def write_demo_square(path: str | Path) -> Path:
-    return write_test_square(path)

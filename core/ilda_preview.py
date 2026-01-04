@@ -1,228 +1,596 @@
-# core/ilda_preview.py
+"""
+ILDA preview renderer for Laser Pipeline GUI.
+
+Supports (read + preview):
+- Format 0: 3D indexed color
+- Format 1: 2D indexed color
+- Format 4: 3D true color
+- Format 5: 2D true color
+- Format 2: palette blocks (used for indexed formats when present)
+
+The GUI expects:
+    from core.ilda_preview import render_ilda_preview
+
+Coordinate system:
+- ILDA coordinates are signed 16-bit [-32768..32767]
+- We map them to a square PNG with margin.
+
+Notes:
+- This module is intentionally "generic": it tries to be tolerant with ILDA files
+  encountered in the wild (misaligned blocks, extra bytes, missing palette blocks).
+"""
+
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import Dict, Iterable, List, Optional, Sequence, Tuple, Union
+import os
+import struct
 
 from PIL import Image, ImageDraw
 
-from .ilda_writer import IldaPoint, IldaFrame
+
+# -----------------------------
+# Palettes
+# -----------------------------
+
+RGB = Tuple[int, int, int]
+
+
+def _clamp_u8(x: int) -> int:
+    return 0 if x < 0 else 255 if x > 255 else int(x)
+
+
+def palette_idtf14() -> List[RGB]:
+    """
+    A pragmatic preview palette. Not a strict spec reproduction; good for sanity checks.
+    Index 0 is black.
+    """
+    pal = [(0, 0, 0)] * 256
+    base = {
+        1: (255, 0, 0),       # red
+        2: (0, 255, 0),       # green
+        3: (0, 0, 255),       # blue
+        4: (255, 255, 0),     # yellow
+        5: (255, 0, 255),     # magenta
+        6: (0, 255, 255),     # cyan
+        7: (255, 255, 255),   # white
+        8: (255, 128, 0),     # orange
+        9: (128, 0, 255),     # purple
+        10: (0, 128, 255),    # azure
+        11: (128, 255, 0),    # lime
+        12: (255, 0, 128),    # pink
+        13: (0, 255, 128),    # spring green
+        14: (128, 128, 128),  # gray
+    }
+    for i, c in base.items():
+        pal[i] = c
+
+    # Fill remaining indices with a small color cube for nicer previews
+    idx = 15
+    steps = [0, 51, 102, 153, 204, 255]
+    for r in steps:
+        for g in steps:
+            for b in steps:
+                if idx >= 256:
+                    break
+                pal[idx] = (r, g, b)
+                idx += 1
+            if idx >= 256:
+                break
+        if idx >= 256:
+            break
+    return pal
+
+
+def palette_white63() -> List[RGB]:
+    """
+    For files that use a single color index and where you just want it to show as white.
+    We map indices 1..63 to white; other indices fall back to idtf14.
+    """
+    pal = palette_idtf14()
+    for i in range(1, 64):
+        pal[i] = (255, 255, 255)
+    return pal
+
+
+def _normalize_palette_name(name: str) -> str:
+    n = (name or "").strip().lower()
+    # aggressively normalize what GUI might send (e.g. "IDTF 14 (64)", "ilda64", etc.)
+    return (
+        n.replace(" ", "")
+        .replace("_", "")
+        .replace("-", "")
+        .replace("(", "")
+        .replace(")", "")
+    )
+
+
+def get_palette_by_name(name: str) -> List[RGB]:
+    """
+    Accepted palette names (case/format-insensitive):
+      - auto
+      - idtf14, idtf, default, idtf14(64), idtf1464, ilda64
+      - white63, white, mono, monochrome
+    """
+    key = _normalize_palette_name(name)
+
+    if key in ("auto", ""):
+        # "auto" is handled in render_ilda_preview (embedded palette if present),
+        # but returning a sane default here keeps the function side-effect free.
+        return palette_idtf14()
+
+    if key in ("idtf14", "idtf", "default", "idtf1464", "ilda64", "ilda"):
+        return palette_idtf14()
+
+    if key in ("white63", "white", "mono", "monochrome"):
+        return palette_white63()
+
+    raise ValueError(f"Unknown palette '{name}' (supported: auto, idtf14, white63)")
+
+
+# -----------------------------
+# ILDA parsing
+# -----------------------------
+
+@dataclass(frozen=True)
+class IldaHeader:
+    format_code: int
+    frame_name: str
+    company_name: str
+    num_records: int
+    frame_number: int
+    total_frames: int
+    scanner_head: int
+
+
+@dataclass
+class IldaFrame:
+    header: IldaHeader
+    # Points are stored as tuples and depend on the frame format:
+    # - fmt 0: (x,y,z,status,color_index)
+    # - fmt 1: (x,y,status,color_index)
+    # - fmt 4: (x,y,z,status,r,g,b)
+    # - fmt 5: (x,y,status,r,g,b)
+    points: List[tuple]
+
+    @property
+    def format_code(self) -> int:
+        return int(self.header.format_code)
+
+    @property
+    def record_count(self) -> int:
+        return int(self.header.num_records)
+
+    @property
+    def frame_number(self) -> int:
+        return int(self.header.frame_number)
+
+    @property
+    def total_frames(self) -> int:
+        return int(self.header.total_frames)
+
+    @property
+    def frame_name(self) -> str:
+        return self.header.frame_name
+
+    @property
+    def company_name(self) -> str:
+        return self.header.company_name
+
 
 ILDA_MAGIC = b"ILDA"
 ILDA_HEADER_SIZE = 32
 
 
-# ======================================================================
-# Lecture ILDA (format 0)
-# ======================================================================
+def _decode_ascii(b: bytes) -> str:
+    return b.decode("ascii", errors="ignore").rstrip("\x00 ").strip()
 
 
-def _read_u16_be(data: bytes, offset: int) -> int:
-    return int.from_bytes(data[offset:offset + 2], "big", signed=False)
-
-
-def _read_s16_be(data: bytes, offset: int) -> int:
-    return int.from_bytes(data[offset:offset + 2], "big", signed=True)
-
-
-def load_ilda_frames(path: Path, max_frames: Optional[int] = None) -> List[IldaFrame]:
+def _parse_header(block: bytes) -> IldaHeader:
     """
-    Lit un fichier ILDA (format 0 = 3D indexed) et retourne une liste de IldaFrame.
-
-    - `max_frames` : si non nul, limite le nombre de frames lues.
-    - Les frames avec 0 points sont conservées (frames vides) afin de
-      garder la synchronisation avec la vidéo.
-    - La seule frame ignorée est la frame EOF finale (nom et société vides,
-      num_points == 0), si elle est présente.
+    Parse the 32-byte ILDA header.
+    Layout (big-endian):
+      0..3   : "ILDA"
+      4..6   : reserved
+      7      : format code
+      8..15  : frame name (8)
+      16..23 : company name (8)
+      24..25 : number of records (u16)
+      26..27 : frame number (u16)
+      28..29 : total frames (u16)
+      30     : scanner head (u8)
+      31     : reserved
     """
+    if len(block) < ILDA_HEADER_SIZE or block[:4] != ILDA_MAGIC:
+        raise ValueError("Not an ILDA header")
+    fmt = block[7]
+    frame_name = _decode_ascii(block[8:16])
+    company_name = _decode_ascii(block[16:24])
+    num_records = struct.unpack(">H", block[24:26])[0]
+    frame_number = struct.unpack(">H", block[26:28])[0]
+    total_frames = struct.unpack(">H", block[28:30])[0]
+    scanner_head = block[30]
+    return IldaHeader(
+        format_code=int(fmt),
+        frame_name=frame_name,
+        company_name=company_name,
+        num_records=int(num_records),
+        frame_number=int(frame_number),
+        total_frames=int(total_frames),
+        scanner_head=int(scanner_head),
+    )
+
+
+def _record_size(fmt: int) -> Optional[int]:
+    # Only formats we render
+    if fmt == 0:
+        return 8   # x,y,z,status,color_index
+    if fmt == 1:
+        return 6   # x,y,status,color_index (2+2+1+1)
+    if fmt == 4:
+        return 10  # x,y,z,status,r,g,b (2+2+2+1+1+1+1)
+    if fmt == 5:
+        return 8   # x,y,status,r,g,b (2+2+1+1+1+1)
+    if fmt == 2:
+        return 3   # r,g,b
+    return None
+
+
+def _is_blanked(status: int) -> bool:
+    # Standard ILDA blanking bit is 0x40
+    return (status & 0x40) != 0
+
+
+def _is_last_point(status: int) -> bool:
+    # "Last point" bit is 0x80
+    return (status & 0x80) != 0
+
+
+def _parse_records(fmt: int, data: bytes, count: int) -> List[tuple]:
+    pts: List[tuple] = []
+
+    if fmt == 0:
+        rec = struct.Struct(">hhhBB")
+        for i in range(count):
+            off = i * 8
+            x, y, z, status, cidx = rec.unpack_from(data, off)
+            pts.append((x, y, z, status, cidx))
+        return pts
+
+    if fmt == 1:
+        rec = struct.Struct(">hhBB")  # x,y,status,color_index
+        for i in range(count):
+            off = i * 6
+            x, y, status, cidx = rec.unpack_from(data, off)
+            pts.append((x, y, status, cidx))
+        return pts
+
+    if fmt == 4:
+        rec = struct.Struct(">hhhBBBB")  # x,y,z,status,r,g,b
+        for i in range(count):
+            off = i * 10
+            x, y, z, status, r, g, b = rec.unpack_from(data, off)
+            pts.append((x, y, z, status, r, g, b))
+        return pts
+
+    if fmt == 5:
+        rec = struct.Struct(">hhBBBB")  # x,y,status,r,g,b
+        for i in range(count):
+            off = i * 8
+            x, y, status, r, g, b = rec.unpack_from(data, off)
+            pts.append((x, y, status, r, g, b))
+        return pts
+
+    raise ValueError(f"Unsupported ILDA format {fmt}")
+
+
+def load_ilda_frames(
+    ilda_path: Union[str, Path]
+) -> Tuple[List[IldaFrame], Optional[List[RGB]], Dict[str, int]]:
+    """
+    Returns (frames, embedded_palette, format_counts).
+
+    - frames: concatenation of all supported geometry frames (fmt 0/1/4/5) in file order
+    - embedded_palette: palette from fmt 2 blocks if present, else None
+    - format_counts: how many ILDA blocks of each format were found (including palette blocks)
+    """
+    path = Path(ilda_path)
+    data = path.read_bytes()
+
     frames: List[IldaFrame] = []
-    path = Path(path)
+    embedded_palette: Optional[List[RGB]] = None
+    format_counts: Dict[str, int] = {}
 
-    with path.open("rb") as f:
-        while True:
-            if max_frames is not None and len(frames) >= max_frames:
-                break
+    pos = 0
+    data_len = len(data)
 
-            header = f.read(ILDA_HEADER_SIZE)
-            if len(header) == 0:
-                break  # fin de fichier
-            if len(header) < ILDA_HEADER_SIZE:
-                raise RuntimeError("Header ILDA tronqué")
+    # Scan for "ILDA" and parse sequentially.
+    while True:
+        idx = data.find(ILDA_MAGIC, pos)
+        if idx < 0:
+            break
+        if idx + ILDA_HEADER_SIZE > data_len:
+            break
 
-            if header[0:4] != ILDA_MAGIC:
-                raise RuntimeError("Fichier ILDA invalide (magic manquant)")
-
-            format_code = int.from_bytes(header[4:8], "big", signed=False)
-            if format_code != 0:
-                raise RuntimeError(
-                    f"Format ILDA non supporté: {format_code} (seul 0 est géré)"
-                )
-
-            num_points = _read_u16_be(header, 24)
-            projector = header[30]
-
-            name = header[8:16].decode("ascii", "ignore").rstrip("\x00")
-            company = header[16:24].decode("ascii", "ignore").rstrip("\x00")
-
-            # Frame EOF finale : nom et société vides + 0 points
-            if num_points == 0 and not name and not company:
-                break
-
-            points: List[IldaPoint] = []
-
-            for _ in range(num_points):
-                data = f.read(8)
-                if len(data) < 8:
-                    raise RuntimeError("Données de point ILDA tronquées")
-
-                x = _read_s16_be(data, 0)
-                y = _read_s16_be(data, 2)
-                z = _read_s16_be(data, 4)
-                status = data[6]
-                color_index = data[7]
-
-                blanked = bool(status & 0x40)
-
-                points.append(
-                    IldaPoint(
-                        x=x,
-                        y=y,
-                        z=z,
-                        blanked=blanked,
-                        color_index=color_index,
-                    )
-                )
-
-            frame = IldaFrame(
-                name=name,
-                company=company,
-                points=points,
-                projector=projector,
-            )
-            frames.append(frame)
-
-    return frames
-
-
-# ======================================================================
-# Rendu en PNG
-# ======================================================================
-
-
-def _ilda_to_screen(
-    px: int,
-    py: int,
-    width: int,
-    height: int,
-    margin: int,
-) -> Tuple[int, int]:
-    """
-    Conversion coordonnées ILDA -> coordonnées écran.
-
-    On suppose que l'espace ILDA utile est [-32767, +32767] sur X et Y.
-    """
-    span_ilda = 2 * 32767.0
-    scale_x = (width - 2 * margin) / span_ilda
-    scale_y = (height - 2 * margin) / span_ilda
-    scale = min(scale_x, scale_y)
-
-    cx = width / 2.0
-    cy = height / 2.0
-
-    x = int(round(cx + px * scale))
-    # Inversion Y (ILDA vers le haut, écran vers le bas)
-    y = int(round(cy - py * scale))
-    return x, y
-
-
-def render_ilda_frame_to_png(
-    frame: IldaFrame,
-    out_png: Path,
-    *,
-    width: int = 640,
-    height: int = 480,
-    margin: int = 10,
-) -> Path:
-    """
-    Rend une IldaFrame en image PNG (traits blancs sur fond noir).
-    """
-    img = Image.new("RGB", (width, height), (0, 0, 0))
-    draw = ImageDraw.Draw(img)
-
-    pts = frame.ensure_points()
-    prev: Optional[Tuple[int, int]] = None
-
-    for pt in pts:
-        x, y = _ilda_to_screen(pt.x, pt.y, width, height, margin)
-
-        if pt.blanked or prev is None:
-            # Déplacement sans tracer (blanked) ou tout premier point
-            prev = (x, y)
+        try:
+            hdr = _parse_header(data[idx:idx + ILDA_HEADER_SIZE])
+        except Exception:
+            pos = idx + 4
             continue
 
-        # Segment lumineux
-        draw.line([prev, (x, y)], fill=(255, 255, 255))
-        prev = (x, y)
+        fmt = hdr.format_code
+        format_counts[str(fmt)] = format_counts.get(str(fmt), 0) + 1
+
+        rec_sz = _record_size(fmt)
+        if rec_sz is None:
+            # Unknown format: don't guess payload length; just continue scanning safely.
+            pos = idx + 4
+            continue
+
+        payload_start = idx + ILDA_HEADER_SIZE
+        payload_len = hdr.num_records * rec_sz
+        payload_end = payload_start + payload_len
+
+        if payload_end > data_len:
+            # malformed: keep scanning after this signature
+            pos = idx + 4
+            continue
+
+        payload = data[payload_start:payload_end]
+
+        if fmt == 2:
+            pal = [(0, 0, 0)] * 256
+            n = min(hdr.num_records, 256)
+            for i in range(n):
+                r, g, b = payload[i * 3:(i + 1) * 3]
+                pal[i] = (int(r), int(g), int(b))
+            embedded_palette = pal
+        elif fmt in (0, 1, 4, 5):
+            pts = _parse_records(fmt, payload, hdr.num_records)
+            frames.append(IldaFrame(header=hdr, points=pts))
+
+        pos = payload_end
+
+    return frames, embedded_palette, format_counts
+
+
+# -----------------------------
+# Rendering
+# -----------------------------
+
+def _iter_drawable_points(points: Sequence[tuple], fmt: int) -> Iterable[tuple]:
+    """
+    Yield points that are drawable (not blanked) with correct status extraction
+    for each supported format.
+    """
+    for p in points:
+        if fmt == 0:
+            # (x,y,z,status,cidx)
+            status = int(p[3])
+        elif fmt == 1:
+            # (x,y,status,cidx)
+            status = int(p[2])
+        elif fmt == 4:
+            # (x,y,z,status,r,g,b)
+            status = int(p[3])
+        elif fmt == 5:
+            # (x,y,status,r,g,b)
+            status = int(p[2])
+        else:
+            continue
+
+        if not _is_blanked(status):
+            yield p
+
+
+def _compute_bounds(points: Sequence[tuple], fmt: int) -> Tuple[int, int, int, int]:
+    """
+    Return (minx, maxx, miny, maxy) from the given point tuples.
+    Assumes points contain x,y at indices [0],[1] for formats we support.
+    """
+    if not points:
+        return (0, 0, 0, 0)
+
+    xs: List[int] = []
+    ys: List[int] = []
+
+    for p in points:
+        xs.append(int(p[0]))
+        ys.append(int(p[1]))
+
+    return (min(xs), max(xs), min(ys), max(ys))
+
+
+def _compute_scale(
+    bounds: Tuple[int, int, int, int],
+    size: int,
+    margin: int,
+    fit_height: bool,
+) -> float:
+    minx, maxx, miny, maxy = bounds
+    spanx = max(1, maxx - minx)
+    spany = max(1, maxy - miny)
+    if fit_height:
+        return (size - 2 * margin) / spany
+    return min((size - 2 * margin) / spanx, (size - 2 * margin) / spany)
+
+
+def _map_xy(
+    x: int,
+    y: int,
+    bounds: Tuple[int, int, int, int],
+    size: int,
+    margin: int,
+    scale: float,
+) -> Tuple[int, int]:
+    minx, maxx, miny, maxy = bounds
+    cx = (minx + maxx) / 2.0
+    cy = (miny + maxy) / 2.0
+
+    px = (x - cx) * scale + size / 2.0
+    py = (-(y - cy)) * scale + size / 2.0  # invert Y for image coordinates
+
+    return int(round(px)), int(round(py))
+
+
+def render_frame_to_image(
+    frame: IldaFrame,
+    palette: List[RGB],
+    image_size: int = 640,
+    margin: int = 10,
+    point_radius: int = 2,
+    line_width: int = 2,
+    swap_rb: bool = False,
+    fit_height: bool = False,
+) -> Image.Image:
+    """
+    Render a single ILDA frame into a PIL Image.
+    """
+    fmt = int(frame.header.format_code)
+    pts = frame.points
+
+    img = Image.new("RGB", (image_size, image_size), (0, 0, 0))
+    draw = ImageDraw.Draw(img)
+
+    # Compute bounds preferentially from non-blanked points (prevents "compressed spaghetti").
+    drawable_pts = list(_iter_drawable_points(pts, fmt))
+    bounds_src = drawable_pts if drawable_pts else pts
+    bounds = _compute_bounds(bounds_src, fmt)
+    scale = _compute_scale(bounds, image_size, margin, fit_height)
+
+    prev_xy: Optional[Tuple[int, int]] = None
+    prev_drawable = False
+
+    for p in pts:
+        if fmt == 0:
+            x, y, _z, status, cidx = p
+            blanked = _is_blanked(int(status))
+            last_pt = _is_last_point(int(status))
+            color = palette[int(cidx) & 0xFF]
+        elif fmt == 1:
+            x, y, status, cidx = p
+            blanked = _is_blanked(int(status))
+            last_pt = _is_last_point(int(status))
+            color = palette[int(cidx) & 0xFF]
+        elif fmt == 4:
+            x, y, _z, status, r, g, b = p
+            blanked = _is_blanked(int(status))
+            last_pt = _is_last_point(int(status))
+            color = (int(r) & 0xFF, int(g) & 0xFF, int(b) & 0xFF)
+        elif fmt == 5:
+            x, y, status, r, g, b = p
+            blanked = _is_blanked(int(status))
+            last_pt = _is_last_point(int(status))
+            color = (int(r) & 0xFF, int(g) & 0xFF, int(b) & 0xFF)
+        else:
+            continue
+        if swap_rb and fmt in (4, 5):
+            color = (color[2], color[1], color[0])
+
+        xy = _map_xy(int(x), int(y), bounds, image_size, margin, scale)
+        drawable = not blanked
+
+        # Draw segment only if both endpoints are drawable.
+        # Use CURRENT point color for the segment (more intuitive for most viewers).
+        if prev_xy is not None and prev_drawable and drawable:
+            draw.line([prev_xy, xy], fill=color, width=line_width)
+
+        # Draw point
+        if drawable:
+            x0, y0 = xy[0] - point_radius, xy[1] - point_radius
+            x1, y1 = xy[0] + point_radius, xy[1] + point_radius
+            draw.ellipse([x0, y0, x1, y1], fill=color)
+
+        # Update pen state
+        if blanked:
+            prev_xy = None
+            prev_drawable = False
+        else:
+            prev_xy = xy
+            prev_drawable = True
+
+        # If "last point" bit is used as a polyline break, stop linking to next point.
+        if (not blanked) and last_pt:
+            prev_xy = None
+            prev_drawable = False
+
+    return img
+
+
+# -----------------------------
+# Public entry point (GUI)
+# -----------------------------
+
+def render_ilda_preview(
+    ilda_path: Union[str, Path],
+    out_png: Union[str, Path],
+    frame_index: int = 1,
+    palette_name: Optional[str] = None,
+    image_size: int = 640,
+    swap_rb: bool = False,
+    fit_height: bool = False,
+) -> Path:
+    """
+    Generate a PNG preview for one frame of an ILDA file.
+
+    Parameters
+    ----------
+    ilda_path:
+        Path to .ild
+    out_png:
+        Where to write the PNG
+    frame_index:
+        1-based index (GUI-friendly). Values <=0 will be treated as 1.
+    palette_name:
+        Palette for indexed formats (0/1).
+        If None, uses env var ILDA_PREVIEW_PALETTE, else 'idtf14'.
+        True-color formats (4/5) ignore this.
+        Accepts 'auto' to mean: embedded palette if present, else idtf14.
+    image_size:
+        Output PNG size (square).
+    """
+    ilda_path = Path(ilda_path)
+    out_png = Path(out_png)
+
+    frames, embedded_palette, fmt_counts = load_ilda_frames(ilda_path)
+
+    if not frames:
+        known = ", ".join(sorted(fmt_counts.keys())) or "none"
+        raise ValueError(
+            "No supported ILDA geometry frames found in file. "
+            f"Formats seen in file: {known}. Supported: 0,1,4,5."
+        )
+
+    idx = int(frame_index) if frame_index is not None else 1
+    if idx <= 0:
+        idx = 1
+    if idx > len(frames):
+        idx = len(frames)
+
+    frame = frames[idx - 1]
+    fmt = int(frame.header.format_code)
+
+    # Choose palette only for indexed formats
+    if fmt in (0, 1):
+        pal_choice = palette_name or os.getenv("ILDA_PREVIEW_PALETTE") or "idtf14"
+        if _normalize_palette_name(pal_choice) == "auto":
+            pal = embedded_palette if embedded_palette is not None else palette_idtf14()
+        else:
+            pal = embedded_palette if embedded_palette is not None else get_palette_by_name(pal_choice)
+    else:
+        # true-color: palette irrelevant
+        pal = palette_idtf14()
+
+    img = render_frame_to_image(
+        frame,
+        pal,
+        image_size=image_size,
+        swap_rb=swap_rb,
+        fit_height=fit_height,
+    )
 
     out_png.parent.mkdir(parents=True, exist_ok=True)
     img.save(out_png)
     return out_png
-
-
-def render_ilda_preview(
-    ilda_path: Path,
-    out_png: Path,
-    *,
-    frame_index: int = 0,
-) -> Path:
-    """
-    Rendu pratique : charge le fichier ILDA et génère un PNG pour une frame.
-
-    - `frame_index` est l'index de **frame vidéo** (0-based).
-      On cherche la frame ILDA dont le champ `name` vaut `Fxxxx` (xxxx
-      = frame_index sur 4 digits). Si elle n'existe pas, on prend la
-      frame dont le numéro dans `name` est le plus proche, ou la première
-      frame si aucune info exploitable n'est disponible.
-    """
-    frames = load_ilda_frames(ilda_path, max_frames=None)
-    if not frames:
-        raise RuntimeError("Aucune frame ILDA lisible dans le fichier")
-
-    target_name = f"F{frame_index:04d}"
-
-    # 1) Recherche exacte sur le nom de frame
-    selected: Optional[IldaFrame] = None
-    for fr in frames:
-        if fr.name == target_name:
-            selected = fr
-            break
-
-    # 2) Si non trouvé, on cherche la frame "la plus proche"
-    if selected is None:
-        target_num = frame_index
-        best_frame: Optional[IldaFrame] = None
-        best_dist: Optional[int] = None
-
-        for fr in frames:
-            if not fr.name:
-                continue
-            # On tolère "F0123" ou "0123"
-            name = fr.name
-            if name[0] in ("F", "f"):
-                name = name[1:]
-            try:
-                num = int(name)
-            except ValueError:
-                continue
-
-            dist = abs(num - target_num)
-            if best_dist is None or dist < best_dist:
-                best_dist = dist
-                best_frame = fr
-
-        if best_frame is not None:
-            selected = best_frame
-        else:
-            selected = frames[0]
-
-    return render_ilda_frame_to_png(selected, out_png)

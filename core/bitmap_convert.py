@@ -111,7 +111,7 @@ def convert_project_frames_to_bmp(
 
     for idx, png_path in enumerate(png_files, start=1):
         if cancel_cb and cancel_cb():
-            raise RuntimeError("Conversion BMP annulée par l'utilisateur.")
+            raise RuntimeError("BMP conversion canceled by user.")
 
         bmp_path = bmp_dir / (png_path.stem + ".bmp")
         _convert_png_to_bmp(png_path, bmp_path, threshold, use_thinning)

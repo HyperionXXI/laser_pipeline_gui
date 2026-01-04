@@ -1,0 +1,18 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "laser-pipeline-gui"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = [
+  "PySide6",
+  "opencv-python",
+  "numpy",
+  "svgpathtools",
+  "pillow",
+]
+
+[tool.setuptools]
+packages = ["core", "core.pipeline", "gui"]
