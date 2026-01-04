@@ -8,10 +8,12 @@ from gui.pipeline_controller import PipelineController
 from gui.services.pipeline_service import PipelineService
 from gui.services.suggestion_service import SuggestionError, SuggestionService
 from gui.ui.controllers.pipeline_settings_mapper import collect_settings
+from gui.ui.controllers.settings_io import collect_ui_state
 from gui.ui.controllers.pipeline_ui_actions import PipelineUiActions
 from gui.ui.controllers.preview_controller import PreviewController
 from gui.ui.panels.general_panel import GeneralPanel
 from gui.ui.panels.pipeline_panel import PipelinePanel
+from gui.services.settings_service import SettingsService
 
 
 class PipelineUiController:
@@ -25,6 +27,7 @@ class PipelineUiController:
         pipeline_controller: PipelineController,
         projects_root: Path,
         log_fn: Callable[[str], None],
+        settings_service: SettingsService,
     ) -> None:
         self._general_panel = general_panel
         self._pipeline_panel = pipeline_panel
@@ -34,6 +37,7 @@ class PipelineUiController:
         self._projects_root = projects_root
         self._suggestion_service = SuggestionService(projects_root)
         self._log = log_fn
+        self._settings_service = settings_service
         self._last_suggested_mode: str | None = None
         self._last_suggested_project: str | None = None
         self._suggested_params: dict[str, object] = {}
@@ -130,6 +134,7 @@ class PipelineUiController:
             )
             self._log(f"[UI] Applied suggested params: {summary}")
         self._general_panel.apply_suggested_mode()
+        self._save_settings("apply_suggestions")
 
     def on_mode_changed(self) -> None:
         mode_key = str(self._general_panel.combo_ilda_mode.currentData() or "classic")
@@ -150,12 +155,14 @@ class PipelineUiController:
         self._actions.on_potrace_click()
 
     def on_export_ilda_click(self) -> None:
+        self._save_settings("export_ilda")
         self._actions.on_export_ilda_click()
 
     def on_cancel_task(self) -> None:
         self._actions.on_cancel_task()
 
     def on_execute_all_task(self) -> None:
+        self._save_settings("full_pipeline")
         self._actions.on_execute_all_task()
 
     def on_play_click(self) -> None:
@@ -329,3 +336,19 @@ class PipelineUiController:
         self._pipeline_panel.spin_arcade_max_points.setValue(
             int(params["max_points_per_frame"])
         )
+
+    def _save_settings(self, reason: str) -> None:
+        project = (self._general_panel.edit_project.text() or "").strip()
+        if not project:
+            return
+        project_root = self._projects_root / project
+        if not project_root.exists():
+            self._log("[Settings] Save skipped (project folder missing).")
+            return
+        data = collect_ui_state(
+            general_panel=self._general_panel,
+            pipeline_panel=self._pipeline_panel,
+            preview_controller=self._preview_controller,
+        )
+        if self._settings_service.save(project, data):
+            self._log(f"[Settings] Saved ({reason}).")

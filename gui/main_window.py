@@ -22,8 +22,10 @@ from gui.ui.menu import setup_menus, MenuCallbacks
 from gui.ui.controllers.pipeline_ui_controller import PipelineUiController
 from gui.ui.controllers.preview_controller import PreviewController
 from gui.ui.controllers.project_controller import ProjectController
+from gui.ui.controllers.settings_io import collect_ui_state
 from gui.ui.panels.general_panel import GeneralPanel
 from gui.ui.panels.pipeline_panel import PipelinePanel
+from gui.services.settings_service import SettingsService
 
 
 class MainWindow(QMainWindow):
@@ -58,6 +60,7 @@ class MainWindow(QMainWindow):
         # Pipeline controller
         self.pipeline = PipelineController(parent=self, log_fn=self.log)
         self.pipeline_service = PipelineService(self.pipeline)
+        self.settings_service = SettingsService(projects_root=PROJECTS_ROOT)
         self.preview_controller = PreviewController(
             general_panel=self.general_panel,
             pipeline_panel=self.pipeline_panel,
@@ -72,13 +75,17 @@ class MainWindow(QMainWindow):
             pipeline_controller=self.pipeline,
             projects_root=PROJECTS_ROOT,
             log_fn=self.log,
+            settings_service=self.settings_service,
         )
         self.project_controller = ProjectController(
             parent=self,
             general_panel=self.general_panel,
+            pipeline_panel=self.pipeline_panel,
+            preview_controller=self.preview_controller,
             projects_root=PROJECTS_ROOT,
             log_fn=self.log,
             refresh_previews_fn=self.preview_controller.refresh_previews,
+            settings_service=self.settings_service,
         )
 
         setup_menus(
@@ -181,6 +188,25 @@ class MainWindow(QMainWindow):
 
     def _apply_style(self) -> None:
         self.setStyleSheet("")
+
+    def closeEvent(self, event) -> None:
+        self._save_settings_on_close()
+        super().closeEvent(event)
+
+    def _save_settings_on_close(self) -> None:
+        project = (self.general_panel.edit_project.text() or "").strip()
+        if not project:
+            return
+        project_root = PROJECTS_ROOT / project
+        if not project_root.exists():
+            return
+        data = collect_ui_state(
+            general_panel=self.general_panel,
+            pipeline_panel=self.pipeline_panel,
+            preview_controller=self.preview_controller,
+        )
+        if self.settings_service.save(project, data):
+            self.log(f"[Settings] Saved on close ({project}/settings.json)")
 
 
 

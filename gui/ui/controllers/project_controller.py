@@ -7,6 +7,10 @@ from typing import Callable
 from PySide6.QtWidgets import QFileDialog, QInputDialog, QMessageBox, QWidget
 
 from gui.ui.panels.general_panel import GeneralPanel
+from gui.ui.controllers.preview_controller import PreviewController
+from gui.ui.controllers.settings_io import apply_ui_state
+from gui.services.settings_service import SettingsService
+from gui.ui.panels.pipeline_panel import PipelinePanel
 
 
 class ProjectController:
@@ -15,15 +19,21 @@ class ProjectController:
         *,
         parent: QWidget,
         general_panel: GeneralPanel,
+        pipeline_panel: PipelinePanel,
+        preview_controller: PreviewController,
         projects_root: Path,
         log_fn: Callable[[str], None],
         refresh_previews_fn: Callable[[], None],
+        settings_service: SettingsService,
     ) -> None:
         self._parent = parent
         self._general_panel = general_panel
+        self._pipeline_panel = pipeline_panel
+        self._preview_controller = preview_controller
         self._projects_root = projects_root
         self._log = log_fn
         self._refresh_previews = refresh_previews_fn
+        self._settings_service = settings_service
 
     def choose_video(self) -> None:
         path, _ = QFileDialog.getOpenFileName(
@@ -77,6 +87,16 @@ class ProjectController:
 
             self._general_panel.edit_project.setText(project_name)
             self._log(f"[UI] Project opened: {project_name}")
+            settings = self._settings_service.load(project_name)
+            if settings:
+                apply_ui_state(
+                    settings,
+                    general_panel=self._general_panel,
+                    pipeline_panel=self._pipeline_panel,
+                    preview_controller=self._preview_controller,
+                    ignore_project_name=True,
+                )
+                self._log(f"[Settings] Loaded from {project_name}/settings.json")
             self._refresh_previews()
         except Exception as exc:
             self._log(f"[UI] Open Project error: {exc}")
