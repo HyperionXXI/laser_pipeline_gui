@@ -3,6 +3,7 @@
 
 # Fichiers générés par le pipeline
 projects/
+settings.json
 
 # Python
 __pycache__/
@@ -15,4 +16,4 @@ __pycache__/
 
 WIP_*.patch
 _send_*.py
-context_gpt_REPRISE.md
+docs/legacy/
